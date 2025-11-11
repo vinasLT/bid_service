@@ -77,7 +77,7 @@ async def test_mark_bid_as_won_marks_bid_and_notifies(monkeypatch):
     ]
     assert publisher.connected is True
     assert publisher.closed is True
-    assert publisher.publish_calls and publisher.publish_calls[0][0] == "notification.bid.won"
+    assert publisher.publish_calls and publisher.publish_calls[0][0] == "bid.you_won_bid"
     payload = publisher.publish_calls[0][1]
     assert payload["bid_status"] == BidStatus.WON.value
     assert payload["vehicle_image"] == "first.jpg"

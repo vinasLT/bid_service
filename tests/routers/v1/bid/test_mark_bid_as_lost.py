@@ -80,7 +80,7 @@ async def test_mark_bid_as_lost_marks_bid_refunds_and_notifies(monkeypatch):
         {"bid_id": existing_bid.id, "auction_result_bid": lost_bid.auction_result_bid}
     ]
     assert account_client.calls and account_client.calls[0]["amount"] == lost_bid.bid_amount
-    assert publisher.publish_calls[0][0] == "notification.bid.outbid"
+    assert publisher.publish_calls[0][0] == "bid.you_lost_bid"
     payload = publisher.publish_calls[0][1]
     assert payload["bid_status"] == BidStatus.LOST.value
     assert payload["refunded_amount"] == lost_bid.bid_amount

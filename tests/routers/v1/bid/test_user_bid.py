@@ -186,7 +186,7 @@ async def test_bid_on_auction_creates_bid_and_publishes_notification(monkeypatch
     assert created_payload.images.startswith("img_hd_1")
 
     assert account_stub.account_info_calls == ["user-xyz"]
-    assert account_stub.calls and account_stub.calls[0]["amount"] == data.bid_amount
+    assert account_stub.calls and account_stub.calls[0]["amount"] == -data.bid_amount
 
     assert publisher_stub.connected is True
     assert publisher_stub.closed is True
