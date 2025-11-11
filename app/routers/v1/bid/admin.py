@@ -20,7 +20,7 @@ from app.rpc_client.gen.python.payment.v1 import stripe_pb2
 from app.schemas.bid import BidPage, BidAdminFilters, BidWinRequest, BidLostRequest, BidStatus
 from app.services.rabbit_service import RabbitMQPublisher
 
-admin_bids_router = APIRouter(prefix='/admin')
+bids_management_router = APIRouter()
 
 
 def _extract_primary_image(images: str | None) -> str | None:
@@ -67,7 +67,7 @@ async def _get_user_contacts(user_uuid: str) -> tuple[Any | None, Any | None] | 
         raise_rpc_problem("Auth", exc)
 
 
-@admin_bids_router.get(
+@bids_management_router.get(
     '/bids',
     response_model=BidPage,
     description=f'List all bids with pagination, required_permission: {Permissions.BID_ALL_READ.value}',
@@ -83,7 +83,7 @@ async def get_all_bids(
     return await paginate(db, query, params)
 
 
-@admin_bids_router.post(
+@bids_management_router.post(
     '/bids/{bid_id}/won',
     response_model=BidRead,
     description=f'Mark bid as won and notify the user, required_permission: {Permissions.BID_ALL_WRITE.value}',
@@ -135,7 +135,7 @@ async def mark_bid_as_won(
     return bid
 
 
-@admin_bids_router.post(
+@bids_management_router.post(
     '/bids/{bid_id}/lost',
     response_model=BidRead,
     description=f'Mark bid as lost, refund user funds, and notify them about the outbid, required_permission: {Permissions.BID_ALL_WRITE.value}',
