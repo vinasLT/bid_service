@@ -1,3 +1,5 @@
+from typing import Any
+
 import grpc
 from AuthTools import HeaderUser
 from AuthTools.Permissions.dependencies import require_permissions
@@ -10,8 +12,10 @@ from app.config import Permissions
 from app.core.utils import raise_rpc_problem
 from app.database.crud import BidService
 from app.database.db.session import get_async_db
+from app.database.models import Bid
 from app.database.schemas.bid import BidRead, BidUpdate
 from app.rpc_client.account import AccountRpcClient
+from app.rpc_client.auth_rcp import AuthRcp
 from app.rpc_client.gen.python.payment.v1 import stripe_pb2
 from app.schemas.bid import BidPage, BidAdminFilters, BidWinRequest, BidLostRequest, BidStatus
 from app.services.rabbit_service import RabbitMQPublisher
@@ -34,7 +38,7 @@ def _serialize_datetime(value):
     return str(value)
 
 
-def _build_bid_notification_payload(bid):
+def _build_bid_notification_payload(bid: Bid, email: str | None, phone_number: str | None):
     auction_value = bid.auction.value if hasattr(bid.auction, "value") else bid.auction
     bid_status_value = bid.bid_status.value if hasattr(bid.bid_status, "value") else bid.bid_status
     return {
@@ -43,13 +47,24 @@ def _build_bid_notification_payload(bid):
         "lot_id": bid.lot_id,
         "auction": auction_value,
         "bid_amount": bid.bid_amount,
-        "auction_result_bid": bid.auction_result_bid,
+        "final_bid": bid.auction_result_bid,
         "vehicle_title": bid.title,
         "vehicle_image": _extract_primary_image(bid.images),
         "auction_date": _serialize_datetime(bid.auction_date),
         "vin": bid.vin,
         "bid_status": bid_status_value,
+        'email': email,
+        'phone_number': phone_number,
     }
+
+
+async def _get_user_contacts(user_uuid: str) -> tuple[Any | None, Any | None] | None:
+    try:
+        async with AuthRcp() as auth_client:
+            response = await auth_client.get_user(user_uuid=user_uuid)
+            return response.email or None, response.phone_number or None
+    except grpc.aio.AioRpcError as exc:
+        raise_rpc_problem("Auth", exc)
 
 
 @admin_bids_router.get(
@@ -95,12 +110,16 @@ async def mark_bid_as_won(
     if bid is None:
         raise BadRequestProblem(detail="Bid not found")
 
-    payload = _build_bid_notification_payload(bid)
+    email, phone_number = await _get_user_contacts(bid.user_uuid)
+    payload = _build_bid_notification_payload(bid, email=email, phone_number=phone_number)
 
     publisher = RabbitMQPublisher()
     try:
         await publisher.connect()
-        await publisher.publish(routing_key="notification.bid.won", payload=payload)
+        payload['destination'] = 'email'
+        await publisher.publish(routing_key="bid.you_won_bid", payload=payload)
+        payload['destination'] = 'sms'
+        await publisher.publish(routing_key="bid.you_won_bid", payload=payload)
     except Exception as exc:
         await bid_service.update(
             bid_id,
@@ -167,14 +186,18 @@ async def mark_bid_as_lost(
             )
             raise_rpc_problem("Account", exc)
 
-    payload = _build_bid_notification_payload(bid)
+    email, phone_number = await _get_user_contacts(bid.user_uuid)
+    payload = _build_bid_notification_payload(bid, email=email, phone_number=phone_number)
     if refund_required:
         payload["refunded_amount"] = bid.bid_amount
 
     publisher = RabbitMQPublisher()
     try:
         await publisher.connect()
-        await publisher.publish(routing_key="notification.bid.outbid", payload=payload)
+        payload['destination'] = 'email'
+        await publisher.publish(routing_key="bid.you_lost_bid", payload=payload)
+        payload['destination'] = 'sms'
+        await publisher.publish(routing_key="bid.you_lost_bid", payload=payload)
     except Exception as exc:
         if refund_required:
             raise BadRequestProblem(detail=f"Failed to send notification after refund was processed: {exc}")

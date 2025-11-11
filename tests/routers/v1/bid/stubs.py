@@ -136,6 +136,32 @@ class AccountClientStub:
             raise self.transaction_exc
 
 
+class AuthClientStub:
+    def __init__(
+        self,
+        *,
+        email: str | None = "user@example.com",
+        phone_number: str | None = "+10000000000",
+        exc: Exception | None = None,
+    ):
+        self.email = email
+        self.phone_number = phone_number
+        self.exc = exc
+        self.calls: list[str] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def get_user(self, user_uuid: str):
+        self.calls.append(user_uuid)
+        if self.exc:
+            raise self.exc
+        return SimpleNamespace(email=self.email, phone_number=self.phone_number)
+
+
 class BidPlacementServiceStub:
     def __init__(
         self,
@@ -212,6 +238,11 @@ def override_publisher(monkeypatch, stub: PublisherStub):
 
 def override_account_client(monkeypatch, stub: AccountClientStub):
     monkeypatch.setattr(admin, "AccountRpcClient", lambda: stub)
+    return stub
+
+
+def override_auth_client(monkeypatch, stub: AuthClientStub):
+    monkeypatch.setattr(admin, "AuthRcp", lambda: stub)
     return stub
 
 

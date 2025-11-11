@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import grpc
@@ -12,7 +13,7 @@ from app.config import Permissions
 from app.core.utils import raise_rpc_problem
 from app.database.crud import BidService
 from app.database.db.session import get_async_db
-from app.database.schemas.bid import BidCreate
+from app.database.schemas.bid import BidCreate, BidRead
 from app.rpc_client.account import AccountRpcClient
 from app.rpc_client.auction_api import ApiRpcClient
 from app.schemas.bid import BidIn
@@ -20,6 +21,9 @@ from app.rpc_client.gen.python.payment.v1 import stripe_pb2
 from app.services.rabbit_service import RabbitMQPublisher
 
 user_bids_router = APIRouter()
+
+
+BID_PLACEMENT_CUTOFF = timedelta(minutes=15)
 
 
 def _get_proto_value(message, field_name: str):
@@ -31,6 +35,21 @@ def _get_proto_value(message, field_name: str):
     return value
 
 
+def _parse_auction_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return None
+        try:
+            parsed = datetime.strptime(normalized, "%Y-%m-%dT%H:%M:%SZ")
+        except ValueError:
+            return None
+        return parsed.replace(tzinfo=timezone.utc)
+    return None
+
+
 def _collect_lot_images(lot_data) -> str | None:
     images = list(lot_data.link_img_hd)
     if not images:
@@ -38,12 +57,13 @@ def _collect_lot_images(lot_data) -> str | None:
     return ",".join(images) if images else None
 
 
-def _build_bid_payload(lot_data) -> dict[str, Any]:
+def _build_bid_payload(lot_data, *, auction_datetime: datetime | None = None) -> dict[str, Any]:
     engine_size = _get_proto_value(lot_data, "engine_size")
     cylinders = _get_proto_value(lot_data, "cylinders")
+    auction_datetime = auction_datetime or _parse_auction_datetime(_get_proto_value(lot_data, "auction_date"))
     return {
         "title": _get_proto_value(lot_data, "title"),
-        "auction_date": _get_proto_value(lot_data, "auction_date"),
+        "auction_date": auction_datetime,
         "vin": _get_proto_value(lot_data, "vin"),
         "images": _collect_lot_images(lot_data),
         "odometer": _get_proto_value(lot_data, "odometer"),
@@ -61,9 +81,9 @@ def _build_bid_payload(lot_data) -> dict[str, Any]:
 
 
 
-
 @user_bids_router.post(
     '/bid',
+    response_model=BidRead,
     description=f'Bid on some lot on auction, required_permission: {Permissions.BID_WRITE.value}',
 )
 async def bid_on_auction(
@@ -71,7 +91,7 @@ async def bid_on_auction(
     data: BidIn = Body(...),
     user: HeaderUser = Depends(require_permissions(Permissions.BID_WRITE.value)),
 ):
-    user_uuid = user.user_uuid
+    user_uuid = user.uuid
     bid_service = BidService(db)
 
     lot_payload: dict[str, Any] | None = None
@@ -88,7 +108,13 @@ async def bid_on_auction(
             if lot_data.form_get_type == 'history':
                 raise BadRequestProblem(detail="Auction is closed")
 
-            lot_payload = _build_bid_payload(lot_data)
+            lot_auction_datetime = _parse_auction_datetime(_get_proto_value(lot_data, "auction_date"))
+            if lot_auction_datetime:
+                now_utc = datetime.now(timezone.utc)
+                if lot_auction_datetime - now_utc <= BID_PLACEMENT_CUTOFF:
+                    raise BadRequestProblem(detail="Auction starts in less than 15 minutes")
+
+            lot_payload = _build_bid_payload(lot_data, auction_datetime=lot_auction_datetime)
 
             current_bid_response = await auction_client.get_current_bid(
                 lot_id=data.lot_id, site=data.auction.value
@@ -112,7 +138,10 @@ async def bid_on_auction(
 
             highest_bid = await bid_service.get_highest_bid_for_lot(data.auction, data.lot_id)
             if highest_bid and highest_bid.bid_amount >= data.bid_amount:
-                raise BadRequestProblem(detail="Someone made a higher bid for this lot")
+                if highest_bid.user_uuid == user_uuid:
+                    raise BadRequestProblem(detail="Your previous bid is higher or equal to current bid")
+                else:
+                    raise BadRequestProblem(detail="Someone already placed a higher bid for this lot")
 
             previous_bid = await bid_service.get_user_bid_for_lot(user_uuid, data.auction, data.lot_id)
             if previous_bid and previous_bid.bid_amount >= data.bid_amount:
@@ -131,28 +160,26 @@ async def bid_on_auction(
             await account_client.create_transaction(
                 user_uuid=user_uuid,
                 transaction_type=stripe_pb2.TransactionType.TRANSACTION_TYPE_BID_PLACEMENT,
-                amount=data.bid_amount,
+                amount=-data.bid_amount,
             )
     except grpc.aio.AioRpcError as exc:
-        raise_rpc_problem("Account", exc)
+        raise_rpc_problem("Payment", exc)
 
 
     if bid is None:
         raise BadRequestProblem(detail="Bid was not created")
 
-    auction_date_value = lot_payload.get("auction_date")
-    if auction_date_value is not None and hasattr(auction_date_value, "isoformat"):
-        auction_date_value = auction_date_value.isoformat()
-
     payload = {
         "user_uuid": user_uuid,
         "bid_amount": bid.bid_amount,
-        "auction_data": auction_date_value,
         "vehicle_title": lot_payload.get("title"),
         "vehicle_image": lot_payload.get("images").split(',')[0] if lot_payload.get("images") else None,
         "auction": data.auction.value,
         "lot_id": data.lot_id,
         "current_bid": current_bid_amount,
+        "auction_date": str(lot_payload.get("auction_date")),
+        'email': user.email,
+        'destination': 'email'
     }
 
     publisher = RabbitMQPublisher()
@@ -161,3 +188,5 @@ async def bid_on_auction(
         await publisher.publish(routing_key="bid.new_bid_placed", payload=payload)
     finally:
         await publisher.close()
+
+    return bid

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import grpc
@@ -27,7 +27,7 @@ def _make_lot_data(**overrides):
         "link_img_hd": ("img_hd_1.jpg", "img_hd_2.jpg"),
         "link_img_small": ("thumb_1.jpg",),
         "title": "Clean Title Vehicle",
-        "auction_date": datetime(2024, 1, 2),
+        "auction_date": datetime.now(timezone.utc) + timedelta(days=1),
         "vin": "VIN123",
         "odometer": 12000,
         "location": "Some Yard",
@@ -60,7 +60,7 @@ def _call_bid_on_auction(data: BidIn, user_uuid: str = "user-123"):
     return user.bid_on_auction(
         db=object(),
         data=data,
-        user=SimpleNamespace(user_uuid=user_uuid),
+        user=SimpleNamespace(uuid=user_uuid, email="user@example.com"),
     )
 
 
@@ -82,6 +82,17 @@ async def test_bid_on_auction_rejects_closed_auction(monkeypatch):
     with pytest.raises(BadRequestProblem) as exc_info:
         await _call_bid_on_auction(BidIn(lot_id=5, auction=Auctions.COPART, bid_amount=7_000))
     assert exc_info.value.detail == "Auction is closed"
+
+
+@pytest.mark.asyncio
+async def test_bid_on_auction_rejects_when_auction_starts_within_cutoff(monkeypatch):
+    auction_date = datetime.now(timezone.utc) + timedelta(minutes=10)
+    api_stub = ApiRpcClientStub(lot_items=[_make_lot_data(auction_date=auction_date)])
+    _setup_defaults(monkeypatch, api_stub=api_stub)
+
+    with pytest.raises(BadRequestProblem) as exc_info:
+        await _call_bid_on_auction(BidIn(lot_id=6, auction=Auctions.COPART, bid_amount=7_500))
+    assert exc_info.value.detail == "Auction starts in less than 15 minutes"
 
 
 @pytest.mark.asyncio
@@ -112,13 +123,13 @@ async def test_bid_on_auction_rejects_when_not_enough_money(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_bid_on_auction_rejects_when_someone_already_has_higher_bid(monkeypatch):
-    highest_bid = DummyBid(bid_amount=12_000)
+    highest_bid = DummyBid(bid_amount=12_000, user_uuid="other-user")
     bid_stub = BidPlacementServiceStub(highest_bid=highest_bid)
     _setup_defaults(monkeypatch, bid_stub=bid_stub)
 
     with pytest.raises(BadRequestProblem) as exc_info:
         await _call_bid_on_auction(BidIn(lot_id=10, auction=Auctions.COPART, bid_amount=11_000))
-    assert exc_info.value.detail == "Someone made a higher bid for this lot"
+    assert exc_info.value.detail == "Someone already placed a higher bid for this lot"
     assert bid_stub.user_bid_calls == []
     assert bid_stub.create_calls == []
 
@@ -148,7 +159,7 @@ async def test_bid_on_auction_raises_when_bid_not_created(monkeypatch):
 @pytest.mark.asyncio
 async def test_bid_on_auction_creates_bid_and_publishes_notification(monkeypatch):
     api_stub = ApiRpcClientStub(
-        lot_items=[_make_lot_data(auction_date=datetime(2024, 3, 5))],
+        lot_items=[_make_lot_data(auction_date=datetime.now(timezone.utc) + timedelta(days=2))],
         current_bid_amount=4_500,
     )
     created_bid = DummyBid(bid_amount=6_000)
@@ -167,7 +178,7 @@ async def test_bid_on_auction_creates_bid_and_publishes_notification(monkeypatch
     data = BidIn(lot_id=20, auction=Auctions.COPART, bid_amount=6_000)
     result = await _call_bid_on_auction(data, user_uuid="user-xyz")
 
-    assert result is None
+    assert result is created_bid
     assert bid_stub.create_calls, "Expected bid creation call"
     created_payload = bid_stub.create_calls[0]
     assert created_payload.lot_id == data.lot_id
@@ -225,5 +236,5 @@ async def test_bid_on_auction_raises_rpc_problem_when_account_client_fails(monke
 
     with pytest.raises(RuntimeError, match="account rpc"):
         await _call_bid_on_auction(BidIn(lot_id=40, auction=Auctions.COPART, bid_amount=8_000))
-    assert captured["service_name"] == "Account"
+    assert captured["service_name"] == "Payment"
     assert captured["exc"] is rpc_error

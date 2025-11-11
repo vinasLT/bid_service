@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi_problem.handler import new_exception_handler, add_exception_handler
 
 from app.config import settings
+from app.routers.v1.private import private_router
 
 docs_url = "/docs" if settings.enable_docs else None
 redoc_url = "/redoc"  if settings.enable_docs else None
@@ -19,6 +20,8 @@ app = FastAPI(
 
 eh = new_exception_handler()
 add_exception_handler(app, eh)
+
+app.include_router(private_router)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="localhost", port=8001)
