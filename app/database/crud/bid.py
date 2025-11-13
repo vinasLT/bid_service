@@ -32,6 +32,12 @@ class BidService(BaseService[Bid, BidCreate, BidUpdate]):
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_bids_count_for_user(self, user_uuid: str) -> int:
+        stmt = select(func.count()).select_from(Bid).where(Bid.user_uuid == user_uuid,
+                                                           ).where(Bid.bid_status == BidStatus.WAITING_AUCTION_RESULT)
+        result = await self.session.execute(stmt)
+        return result.scalar_one()
+
     async def get_user_bid_for_lot(
         self, user_uuid: str, auction: Auctions, lot_id: int
     ) -> Bid | None:

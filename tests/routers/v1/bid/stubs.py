@@ -111,6 +111,8 @@ class AccountClientStub:
         self.info_exc = info_exc
         self.transaction_exc = transaction_exc
         self.account_info = account_info or SimpleNamespace(balance=0)
+        if not hasattr(self.account_info, "plan"):
+            self.account_info.plan = SimpleNamespace(max_bid_one_time=None)
         self.calls: list[dict] = []
         self.account_info_calls: list[str] = []
 
@@ -178,13 +180,16 @@ class BidPlacementServiceStub:
         highest_bid: DummyBid | None = None,
         user_bid: DummyBid | None = None,
         create_result: DummyBid | None = None,
+        bids_count: int = 0,
     ):
         self.highest_bid = highest_bid
         self.user_bid = user_bid
         self.create_result = create_result
+        self.bids_count = bids_count
         self.highest_calls: list[tuple] = []
         self.user_bid_calls: list[tuple] = []
         self.create_calls: list = []
+        self.bids_count_calls: list[str] = []
         self.build_query_kwargs: dict | None = None
         self.query_stub: QueryStub | None = None
 
@@ -204,6 +209,10 @@ class BidPlacementServiceStub:
         self.build_query_kwargs = kwargs
         self.query_stub = QueryStub()
         return self.query_stub
+
+    async def get_bids_count_for_user(self, user_uuid: str):
+        self.bids_count_calls.append(user_uuid)
+        return self.bids_count
 
 
 class ApiRpcClientStub:

@@ -123,6 +123,44 @@ async def test_bid_on_auction_rejects_when_not_enough_money(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_bid_on_auction_requires_plan(monkeypatch):
+    api_stub = ApiRpcClientStub(lot_items=[_make_lot_data()])
+    account_stub = AccountClientStub(
+        account_info=SimpleNamespace(balance=5_000, plan=None),
+    )
+    _setup_defaults(monkeypatch, api_stub=api_stub, account_stub=account_stub)
+
+    with pytest.raises(BadRequestProblem) as exc_info:
+        await _call_bid_on_auction(BidIn(lot_id=4, auction=Auctions.COPART, bid_amount=4_000))
+
+    assert exc_info.value.detail == "You need to buy plan for biding"
+
+
+@pytest.mark.asyncio
+async def test_bid_on_auction_respects_plan_bid_limit(monkeypatch):
+    api_stub = ApiRpcClientStub(lot_items=[_make_lot_data()])
+    account_stub = AccountClientStub(
+        account_info=SimpleNamespace(
+            balance=8_000,
+            plan=SimpleNamespace(max_bid_one_time=2),
+        ),
+    )
+    bid_stub = BidPlacementServiceStub(bids_count=2)
+    _setup_defaults(
+        monkeypatch,
+        api_stub=api_stub,
+        account_stub=account_stub,
+        bid_stub=bid_stub,
+    )
+
+    with pytest.raises(BadRequestProblem) as exc_info:
+        await _call_bid_on_auction(BidIn(lot_id=7, auction=Auctions.COPART, bid_amount=4_000))
+
+    assert exc_info.value.detail == "You can place up to 2 bids at one time"
+    assert bid_stub.bids_count_calls == ["user-123"]
+
+
+@pytest.mark.asyncio
 async def test_bid_on_auction_rejects_when_someone_already_has_higher_bid(monkeypatch):
     highest_bid = DummyBid(bid_amount=12_000, user_uuid="other-user")
     bid_stub = BidPlacementServiceStub(highest_bid=highest_bid)

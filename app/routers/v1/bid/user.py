@@ -136,6 +136,18 @@ async def bid_on_auction(
         async with AccountRpcClient() as account_client:
             account_info = await account_client.get_account_info(user_uuid=user_uuid)
 
+            if not account_info.plan:
+                raise BadRequestProblem(detail="You need to buy plan for biding")
+
+
+            max_bids_at_one_time = account_info.plan.max_bid_one_time
+
+            if max_bids_at_one_time:
+                bids = await bid_service.get_bids_count_for_user(user_uuid)
+                if bids >= max_bids_at_one_time:
+                    raise BadRequestProblem(
+                        detail=f"You can place up to {max_bids_at_one_time} bids at one time"
+                    )
             if account_info.balance < data.bid_amount:
                 raise BadRequestProblem(detail="Not enough money")
 
