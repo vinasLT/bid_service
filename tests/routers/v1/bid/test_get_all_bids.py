@@ -2,7 +2,7 @@ import pytest
 from fastapi_pagination import Params
 
 from app.routers.v1.bid import admin
-from app.schemas.bid import Auctions, BidAdminFilters, BidStatus
+from app.schemas.bid import Auctions, BidFilters, BidStatus
 from tests.routers.v1.bid.stubs import BidServiceStub, override_bid_service
 
 
@@ -21,7 +21,7 @@ async def test_get_all_bids_passes_filters_and_params(monkeypatch):
 
     monkeypatch.setattr(admin, "paginate", fake_paginate)
 
-    filters = BidAdminFilters(
+    filters = BidFilters(
         bid_status=BidStatus.WON,
         auction=Auctions.IAAI,
         search="VINCODE",

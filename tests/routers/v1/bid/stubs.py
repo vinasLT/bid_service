@@ -21,6 +21,15 @@ class DummyBid:
     vin: str = "VINCODE123"
 
 
+class QueryStub:
+    def __init__(self):
+        self.where_calls: list[tuple] = []
+
+    def where(self, *clauses):
+        self.where_calls.append(clauses)
+        return self
+
+
 class BidServiceStub:
     def __init__(
         self,
@@ -176,6 +185,8 @@ class BidPlacementServiceStub:
         self.highest_calls: list[tuple] = []
         self.user_bid_calls: list[tuple] = []
         self.create_calls: list = []
+        self.build_query_kwargs: dict | None = None
+        self.query_stub: QueryStub | None = None
 
     async def get_highest_bid_for_lot(self, auction, lot_id):
         self.highest_calls.append((auction, lot_id))
@@ -188,6 +199,11 @@ class BidPlacementServiceStub:
     async def create(self, bid_create):
         self.create_calls.append(bid_create)
         return self.create_result
+
+    def build_admin_query(self, **kwargs):
+        self.build_query_kwargs = kwargs
+        self.query_stub = QueryStub()
+        return self.query_stub
 
 
 class ApiRpcClientStub:

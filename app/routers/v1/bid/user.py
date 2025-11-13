@@ -5,7 +5,9 @@ import grpc
 from AuthTools import HeaderUser
 from AuthTools.Permissions.dependencies import require_permissions
 from fastapi import APIRouter, Body
-from fastapi.params import Depends
+from fastapi.params import Depends, Param
+from fastapi_pagination import Params
+from fastapi_pagination.ext.sqlalchemy import paginate
 from rfc9457 import BadRequestProblem
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,10 +15,11 @@ from app.config import Permissions
 from app.core.utils import raise_rpc_problem
 from app.database.crud import BidService
 from app.database.db.session import get_async_db
+from app.database.models import Bid
 from app.database.schemas.bid import BidCreate, BidRead
 from app.rpc_client.account import AccountRpcClient
 from app.rpc_client.auction_api import ApiRpcClient
-from app.schemas.bid import BidIn
+from app.schemas.bid import BidIn, GetMyBidIn, BidPage, BidFilters
 from app.rpc_client.gen.python.payment.v1 import stripe_pb2
 from app.services.rabbit_service import RabbitMQPublisher
 
@@ -89,7 +92,7 @@ def _build_bid_payload(lot_data, *, auction_datetime: datetime | None = None) ->
 async def bid_on_auction(
     db: AsyncSession = Depends(get_async_db),
     data: BidIn = Body(...),
-    user: HeaderUser = Depends(require_permissions(Permissions.BID_WRITE.value)),
+    user: HeaderUser = Depends(require_permissions(Permissions.BID_WRITE)),
 ):
     user_uuid = user.uuid
     bid_service = BidService(db)
@@ -190,3 +193,39 @@ async def bid_on_auction(
         await publisher.close()
 
     return bid
+
+@user_bids_router.get(
+    '/bid/my-bid',
+    response_model=BidRead,
+    description=f'Get my bid, required_permission: {Permissions.BID_READ.value}'
+)
+async def get_my_bid(
+        db: AsyncSession = Depends(get_async_db),
+        data: GetMyBidIn = Depends(),
+        user: HeaderUser = Depends(require_permissions(Permissions.BID_READ))
+):
+    bid_service = BidService(db)
+    bid = await bid_service.get_user_bid_for_lot(user.uuid, data.auction, data.lot_id)
+    if bid is None:
+        raise BadRequestProblem(detail="Bid not found")
+    return bid
+
+@user_bids_router.get(
+    '/bid/my',
+    response_model=BidPage,
+    description=f'Get my bids, required_permission: {Permissions.BID_READ.value}'
+)
+async def get_my_bids(
+        db: AsyncSession = Depends(get_async_db),
+        params: Params = Depends(),
+        filters: BidFilters = Depends(),
+        user: HeaderUser = Depends(require_permissions(Permissions.BID_READ))
+):
+    bid_service = BidService(db)
+    filter_payload = filters.model_dump(exclude_none=True)
+    query = bid_service.build_admin_query(**filter_payload).where(Bid.user_uuid == user.uuid)
+    return await paginate(db, query, params)
+
+
+
+

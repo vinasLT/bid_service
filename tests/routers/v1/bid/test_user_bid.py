@@ -3,11 +3,12 @@ from types import SimpleNamespace
 
 import grpc
 import pytest
+from fastapi_pagination import Params
 from rfc9457 import BadRequestProblem
 
 from app.routers.v1.bid import user
-from app.schemas.bid import BidIn
-from app.schemas.bid_enums import Auctions
+from app.schemas.bid import BidIn, BidFilters, GetMyBidIn
+from app.schemas.bid_enums import Auctions, BidStatus
 from tests.routers.v1.bid.stubs import (
     ApiRpcClientStub,
     AccountClientStub,
@@ -238,3 +239,82 @@ async def test_bid_on_auction_raises_rpc_problem_when_account_client_fails(monke
         await _call_bid_on_auction(BidIn(lot_id=40, auction=Auctions.COPART, bid_amount=8_000))
     assert captured["service_name"] == "Payment"
     assert captured["exc"] is rpc_error
+
+
+@pytest.mark.asyncio
+async def test_get_my_bid_returns_existing_bid(monkeypatch):
+    dummy_bid = DummyBid(lot_id=123)
+    stub = BidPlacementServiceStub(user_bid=dummy_bid)
+    override_user_bid_service(monkeypatch, stub)
+
+    request = GetMyBidIn(auction=Auctions.COPART, lot_id=123)
+    current_user = SimpleNamespace(uuid="user-abc")
+
+    result = await user.get_my_bid(
+        db=object(),
+        data=request,
+        user=current_user,
+    )
+
+    assert result is dummy_bid
+    assert stub.user_bid_calls == [("user-abc", request.auction, request.lot_id)]
+
+
+@pytest.mark.asyncio
+async def test_get_my_bid_raises_when_missing(monkeypatch):
+    stub = BidPlacementServiceStub(user_bid=None)
+    override_user_bid_service(monkeypatch, stub)
+
+    request = GetMyBidIn(auction=Auctions.IAAI, lot_id=99)
+    current_user = SimpleNamespace(uuid="user-missing")
+
+    with pytest.raises(BadRequestProblem) as exc_info:
+        await user.get_my_bid(db=object(), data=request, user=current_user)
+
+    assert exc_info.value.detail == "Bid not found"
+    assert stub.user_bid_calls == [("user-missing", request.auction, request.lot_id)]
+
+
+@pytest.mark.asyncio
+async def test_get_my_bids_applies_filters_and_paginate(monkeypatch):
+    stub = BidPlacementServiceStub()
+    override_user_bid_service(monkeypatch, stub)
+
+    captured = {}
+
+    async def fake_paginate(db, query, params):
+        captured["db"] = db
+        captured["query"] = query
+        captured["params"] = params
+        return {"data": ["bid"], "count": 1}
+
+    monkeypatch.setattr(user, "paginate", fake_paginate)
+
+    filters = BidFilters(
+        bid_status=BidStatus.WON,
+        auction=Auctions.COPART,
+        search="VIN777",
+        sort_by="bid_amount",
+        sort_order="asc",
+    )
+    params = Params(page=2, size=25)
+    db_session = object()
+    current_user = SimpleNamespace(uuid="user-777")
+
+    result = await user.get_my_bids(
+        db=db_session,
+        params=params,
+        filters=filters,
+        user=current_user,
+    )
+
+    assert result == {"data": ["bid"], "count": 1}
+    assert stub.build_query_kwargs == filters.model_dump(exclude_none=True)
+    assert captured["db"] is db_session
+    assert captured["params"] is params
+    assert captured["query"] is stub.query_stub
+
+    assert stub.query_stub is not None
+    assert stub.query_stub.where_calls, "Expected user filter applied to query"
+    user_clause = stub.query_stub.where_calls[0][0]
+    assert getattr(user_clause.right, "value", None) == current_user.uuid

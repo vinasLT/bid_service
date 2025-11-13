@@ -17,7 +17,7 @@ from app.database.schemas.bid import BidRead, BidUpdate
 from app.rpc_client.account import AccountRpcClient
 from app.rpc_client.auth_rcp import AuthRcp
 from app.rpc_client.gen.python.payment.v1 import stripe_pb2
-from app.schemas.bid import BidPage, BidAdminFilters, BidWinRequest, BidLostRequest, BidStatus
+from app.schemas.bid import BidPage, BidFilters, BidWinRequest, BidLostRequest, BidStatus
 from app.services.rabbit_service import RabbitMQPublisher
 
 bids_management_router = APIRouter()
@@ -74,7 +74,7 @@ async def _get_user_contacts(user_uuid: str) -> tuple[Any | None, Any | None] | 
 )
 async def get_all_bids(
     params: Params = Depends(),
-    filters: BidAdminFilters = Depends(),
+    filters: BidFilters = Depends(),
     db: AsyncSession = Depends(get_async_db),
     _: HeaderUser = Depends(require_permissions(Permissions.BID_ALL_READ.value)),
 ):

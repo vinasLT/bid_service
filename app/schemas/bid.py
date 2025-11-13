@@ -19,7 +19,7 @@ class BidLostRequest(BaseModel):
     auction_result_bid: int | None = Field(default=None, ge=0)
 
 
-class BidAdminFilters(BaseModel):
+class BidFilters(BaseModel):
     bid_status: BidStatus | None = Field(default=None)
     auction: Auctions | None = Field(default=None)
     search: str | None = Field(default=None, min_length=1, description="Search by lot id, VIN or title")
@@ -31,5 +31,9 @@ class BidAdminFilters(BaseModel):
         default="desc",
         pattern="^(asc|desc)$",
     )
+
+class GetMyBidIn(BaseModel):
+    auction: Auctions = Field(..., description='Auction')
+    lot_id: int = Field(..., description='Lot ID')
 
 BidPage = create_pagination_page(BidRead)
