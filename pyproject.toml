@@ -41,6 +41,9 @@ dev = [
     "pytest-asyncio (>=1.2.0,<2.0.0)",
 ]
 
+[tool.poetry]
+package-mode = false
+
 [tool.pytest.ini_options]
 pythonpath = [
     "."

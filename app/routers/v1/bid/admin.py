@@ -3,7 +3,7 @@ from typing import Any
 import grpc
 from AuthTools import HeaderUser
 from AuthTools.Permissions.dependencies import require_permissions
-from fastapi import APIRouter, Depends, Body
+from fastapi import APIRouter, Depends, Body, Query
 from fastapi_pagination import Params
 from fastapi_pagination.ext.sqlalchemy import paginate
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,7 +20,7 @@ from app.rpc_client.gen.python.payment.v1 import stripe_pb2
 from app.schemas.bid import BidPage, BidFilters, BidWinRequest, BidLostRequest, BidStatus
 from app.services.rabbit_service import RabbitMQPublisher
 
-bids_management_router = APIRouter()
+bids_management_router = APIRouter(prefix='/bids')
 
 
 def _extract_primary_image(images: str | None) -> str | None:
@@ -68,7 +68,7 @@ async def _get_user_contacts(user_uuid: str) -> tuple[Any | None, Any | None] | 
 
 
 @bids_management_router.get(
-    '/bids',
+    '',
     response_model=BidPage,
     description=f'List all bids with pagination, required_permission: {Permissions.BID_ALL_READ.value}',
 )
@@ -84,7 +84,7 @@ async def get_all_bids(
 
 
 @bids_management_router.post(
-    '/bids/{bid_id}/won',
+    '/{bid_id}/won',
     response_model=BidRead,
     description=f'Mark bid as won and notify the user, required_permission: {Permissions.BID_ALL_WRITE.value}',
     dependencies=[Depends(require_permissions(Permissions.BID_ALL_WRITE))],
@@ -134,9 +134,21 @@ async def mark_bid_as_won(
 
     return bid
 
+@bids_management_router.get('/for-user', response_model=BidPage, description=f'Get bids for user, required_permission: {Permissions.BID_ALL_READ.value}',
+                            dependencies=[Depends(require_permissions(Permissions.BID_ALL_READ))])
+async def get_user_bids(
+    params: Params = Depends(),
+    user_uuid: str = Query(...),
+    filters: BidFilters = Depends(),
+    db: AsyncSession = Depends(get_async_db)
+):
+    bid_service = BidService(db)
+    filter_payload = filters.model_dump(exclude_none=True)
+    query = bid_service.build_admin_query(**filter_payload).where(Bid.user_uuid == user_uuid)
+    return await paginate(db, query, params)
 
 @bids_management_router.post(
-    '/bids/{bid_id}/lost',
+    '/{bid_id}/lost',
     response_model=BidRead,
     description=f'Mark bid as lost, refund user funds, and notify them about the outbid, required_permission: {Permissions.BID_ALL_WRITE.value}',
 dependencies=[Depends(require_permissions(Permissions.BID_ALL_WRITE))],

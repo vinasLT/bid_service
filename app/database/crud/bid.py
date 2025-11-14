@@ -15,7 +15,7 @@ class BidService(BaseService[Bid, BidCreate, BidUpdate]):
 
     async def get_all_by_user_uuid(
         self, user_uuid: str, get_stmt: bool = False
-    ) -> Select[tuple[Bid]] | Sequence[Bid]:
+    ) -> Sequence[Bid]:
         stmt = select(Bid).where(Bid.user_uuid == user_uuid)
         if get_stmt:
             return stmt
