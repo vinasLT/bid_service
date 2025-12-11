@@ -16,10 +16,11 @@ from app.core.utils import raise_rpc_problem
 from app.database.crud import BidService
 from app.database.db.session import get_async_db
 from app.database.models import Bid
-from app.database.schemas.bid import BidCreate, BidRead
+from app.database.schemas.bid import BidCreate, BidRead, BidUpdate
 from app.rpc_client.account import AccountRpcClient
 from app.rpc_client.auction_api import ApiRpcClient
 from app.schemas.bid import BidIn, GetMyBidIn, BidPage, BidFilters
+from app.schemas.bid_enums import BidStatus
 from app.rpc_client.gen.python.payment.v1 import stripe_pb2
 from app.services.rabbit_service import RabbitMQPublisher
 
@@ -96,6 +97,7 @@ async def bid_on_auction(
 ):
     user_uuid = user.uuid
     bid_service = BidService(db)
+    now_utc = datetime.now(timezone.utc)
 
     lot_payload: dict[str, Any] | None = None
     current_bid_amount = 0
@@ -113,7 +115,6 @@ async def bid_on_auction(
 
             lot_auction_datetime = _parse_auction_datetime(_get_proto_value(lot_data, "auction_date"))
             if lot_auction_datetime:
-                now_utc = datetime.now(timezone.utc)
                 if lot_auction_datetime - now_utc <= BID_PLACEMENT_CUTOFF:
                     raise BadRequestProblem(detail="Auction starts in less than 15 minutes")
 
@@ -142,15 +143,6 @@ async def bid_on_auction(
 
             max_bids_at_one_time = account_info.plan.max_bid_one_time
 
-            if max_bids_at_one_time:
-                bids = await bid_service.get_bids_count_for_user(user_uuid)
-                if bids >= max_bids_at_one_time:
-                    raise BadRequestProblem(
-                        detail=f"You can place up to {max_bids_at_one_time} bids at one time"
-                    )
-            if account_info.balance < data.bid_amount:
-                raise BadRequestProblem(detail="Not enough money")
-
             highest_bid = await bid_service.get_highest_bid_for_lot(data.auction, data.lot_id)
             if highest_bid and highest_bid.bid_amount >= data.bid_amount:
                 if highest_bid.user_uuid == user_uuid:
@@ -159,23 +151,49 @@ async def bid_on_auction(
                     raise BadRequestProblem(detail="Someone already placed a higher bid for this lot")
 
             previous_bid = await bid_service.get_user_bid_for_lot(user_uuid, data.auction, data.lot_id)
-            if previous_bid and previous_bid.bid_amount >= data.bid_amount:
-                raise BadRequestProblem(detail="Your previous bid is higher")
+            if max_bids_at_one_time and previous_bid is None:
+                bids = await bid_service.get_bids_count_for_user(user_uuid)
+                if bids >= max_bids_at_one_time:
+                    raise BadRequestProblem(
+                        detail=f"You can place up to {max_bids_at_one_time} bids at one time"
+                    )
 
-            bid = await bid_service.create(
-                BidCreate(
-                    lot_id=data.lot_id,
-                    bid_amount=data.bid_amount,
-                    user_uuid=user_uuid,
-                    auction=data.auction,
-                    **lot_payload,
+            required_amount = data.bid_amount
+            if previous_bid:
+                if previous_bid.bid_status in (BidStatus.WON, BidStatus.LOST):
+                    raise BadRequestProblem(detail="Auction already finished for this bid")
+                auction_datetime = lot_auction_datetime or previous_bid.auction_date
+                if auction_datetime and auction_datetime <= now_utc:
+                    raise BadRequestProblem(detail="Auction already finished for this lot")
+                if previous_bid.bid_amount >= data.bid_amount:
+                    raise BadRequestProblem(detail="Your previous bid is higher")
+                required_amount = data.bid_amount - previous_bid.bid_amount
+
+            if account_info.balance < required_amount:
+                raise BadRequestProblem(detail="Not enough money")
+
+            if previous_bid:
+                update_payload = {key: value for key, value in lot_payload.items() if value is not None}
+                update_payload["bid_amount"] = data.bid_amount
+                bid = await bid_service.update(
+                    previous_bid.id,
+                    BidUpdate(**update_payload),
                 )
-            )
+            else:
+                bid = await bid_service.create(
+                    BidCreate(
+                        lot_id=data.lot_id,
+                        bid_amount=data.bid_amount,
+                        user_uuid=user_uuid,
+                        auction=data.auction,
+                        **lot_payload,
+                    )
+                )
 
             await account_client.create_transaction(
                 user_uuid=user_uuid,
                 transaction_type=stripe_pb2.TransactionType.TRANSACTION_TYPE_BID_PLACEMENT,
-                amount=-data.bid_amount,
+                amount=-required_amount,
             )
     except grpc.aio.AioRpcError as exc:
         raise_rpc_problem("Payment", exc)
@@ -237,7 +255,4 @@ async def get_my_bids(
     filter_payload = filters.model_dump(exclude_none=True)
     query = bid_service.build_admin_query(**filter_payload).where(Bid.user_uuid == user.uuid)
     return await paginate(db, query, params)
-
-
-
 
