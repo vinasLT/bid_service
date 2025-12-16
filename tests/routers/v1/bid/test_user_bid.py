@@ -110,6 +110,19 @@ async def test_bid_on_auction_rejects_when_current_bid_is_higher(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_bid_on_auction_rejects_when_account_blocked(monkeypatch):
+    api_stub = ApiRpcClientStub(lot_items=[_make_lot_data()])
+    bid_stub = BidPlacementServiceStub(blocking=True)
+    _setup_defaults(monkeypatch, api_stub=api_stub, bid_stub=bid_stub)
+
+    with pytest.raises(BadRequestProblem) as exc_info:
+        await _call_bid_on_auction(BidIn(lot_id=9, auction=Auctions.COPART, bid_amount=6_000))
+
+    assert exc_info.value.detail == "Account is blocked until payment is completed"
+    assert bid_stub.blocking_checks == ["user-123"]
+
+
+@pytest.mark.asyncio
 async def test_bid_on_auction_rejects_when_not_enough_money(monkeypatch):
     api_stub = ApiRpcClientStub(lot_items=[_make_lot_data()])
     account_stub = AccountClientStub(account_info=SimpleNamespace(balance=3_000))

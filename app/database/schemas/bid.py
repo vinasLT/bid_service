@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from app.schemas.bid_enums import Auctions, BidStatus
+from app.schemas.bid_enums import Auctions, BidStatus, PaymentStatus
 
 
 class BidBase(BaseModel):
@@ -10,6 +10,8 @@ class BidBase(BaseModel):
     auction: Auctions
     bid_amount: int
     bid_status: BidStatus = BidStatus.WAITING_AUCTION_RESULT
+    payment_status: PaymentStatus = PaymentStatus.NOT_REQUIRED
+    account_blocked: bool = False
     auction_result_bid: int | None = None
 
     title: str | None = None
@@ -40,6 +42,8 @@ class BidUpdate(BaseModel):
     user_uuid: str | None = None
     bid_amount: int | None = None
     bid_status: BidStatus | None = None
+    payment_status: PaymentStatus | None = None
+    account_blocked: bool | None = None
     auction_result_bid: int | None = None
 
     title: str | None = None

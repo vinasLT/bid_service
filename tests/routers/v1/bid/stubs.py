@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from app.routers.v1.bid import admin, user
-from app.schemas.bid import Auctions, BidStatus
+from app.schemas.bid import Auctions, BidStatus, PaymentStatus
 
 
 @dataclass
@@ -13,6 +13,8 @@ class DummyBid:
     auction: Auctions = Auctions.COPART
     user_uuid: str = "user-123"
     bid_status: BidStatus = BidStatus.WAITING_AUCTION_RESULT
+    payment_status: PaymentStatus = PaymentStatus.NOT_REQUIRED
+    account_blocked: bool = False
     bid_amount: int = 10_000
     auction_result_bid: int | None = None
     title: str = "Some vehicle"
@@ -37,16 +39,25 @@ class BidServiceStub:
         get_result: DummyBid | None = None,
         mark_won_result: DummyBid | None = None,
         mark_lost_result: DummyBid | None = None,
+        mark_on_approval_result: DummyBid | None = None,
+        mark_paid_result: DummyBid | None = None,
+        has_blocking_result: bool = False,
     ):
         self.db = None
         self.get_result = get_result
         self.mark_won_result = mark_won_result
         self.mark_lost_result = mark_lost_result
+        self.mark_on_approval_result = mark_on_approval_result
+        self.mark_paid_result = mark_paid_result
+        self.has_blocking_result = has_blocking_result
         self.mark_bid_as_won_calls: list[dict] = []
         self.mark_bid_as_lost_calls: list[dict] = []
+        self.mark_bid_as_on_approval_calls: list[dict] = []
+        self.mark_payment_as_paid_calls: list[int] = []
         self.update_calls: list[tuple] = []
         self.build_query_kwargs: dict | None = None
         self.last_get_id: int | None = None
+        self.blocking_checks: list[str] = []
 
     async def get(self, bid_id: int):
         self.last_get_id = bid_id
@@ -75,6 +86,24 @@ class BidServiceStub:
     async def update(self, bid_id: int, data):
         self.update_calls.append((bid_id, data))
         return self.get_result
+
+    async def mark_bid_as_on_approval(
+        self,
+        bid_id: int,
+        auction_result_bid: int | None = None,
+    ):
+        self.mark_bid_as_on_approval_calls.append(
+            {"bid_id": bid_id, "auction_result_bid": auction_result_bid}
+        )
+        return self.mark_on_approval_result
+
+    async def mark_payment_as_paid(self, bid_id: int):
+        self.mark_payment_as_paid_calls.append(bid_id)
+        return self.mark_paid_result
+
+    async def has_blocking_bids(self, user_uuid: str):
+        self.blocking_checks.append(user_uuid)
+        return self.has_blocking_result
 
 
 class PublisherStub:
@@ -181,15 +210,18 @@ class BidPlacementServiceStub:
         user_bid: DummyBid | None = None,
         create_result: DummyBid | None = None,
         bids_count: int = 0,
+        blocking: bool = False,
     ):
         self.highest_bid = highest_bid
         self.user_bid = user_bid
         self.create_result = create_result
         self.bids_count = bids_count
+        self.blocking = blocking
         self.highest_calls: list[tuple] = []
         self.user_bid_calls: list[tuple] = []
         self.create_calls: list = []
         self.bids_count_calls: list[str] = []
+        self.blocking_checks: list[str] = []
         self.build_query_kwargs: dict | None = None
         self.query_stub: QueryStub | None = None
 
@@ -213,6 +245,10 @@ class BidPlacementServiceStub:
     async def get_bids_count_for_user(self, user_uuid: str):
         self.bids_count_calls.append(user_uuid)
         return self.bids_count
+
+    async def has_blocking_bids(self, user_uuid: str):
+        self.blocking_checks.append(user_uuid)
+        return self.blocking
 
 
 class ApiRpcClientStub:

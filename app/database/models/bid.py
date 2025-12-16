@@ -4,7 +4,7 @@ from sqlalchemy import DateTime, Enum, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.models import Base
-from app.schemas.bid import Auctions, BidStatus
+from app.schemas.bid_enums import Auctions, BidStatus, PaymentStatus
 
 
 class Bid(Base):
@@ -16,6 +16,12 @@ class Bid(Base):
     user_uuid: Mapped[str] = mapped_column(nullable=False)
 
     bid_status: Mapped[BidStatus] = mapped_column(Enum(BidStatus), nullable=False, default=BidStatus.WAITING_AUCTION_RESULT)
+    payment_status: Mapped[PaymentStatus] = mapped_column(
+        Enum(PaymentStatus),
+        nullable=False,
+        default=PaymentStatus.NOT_REQUIRED,
+    )
+    account_blocked: Mapped[bool] = mapped_column(nullable=False, default=False)
 
     bid_amount: Mapped[int] = mapped_column(nullable=False)
     auction_result_bid: Mapped[int] = mapped_column(nullable=True)
@@ -49,6 +55,5 @@ class Bid(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
-
 
 

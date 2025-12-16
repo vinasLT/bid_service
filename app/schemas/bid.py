@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field
 
 from app.core.utils import create_pagination_page
 from app.database.schemas.bid import BidRead
-from app.schemas.bid_enums import Auctions, BidStatus
+from app.schemas.bid_enums import Auctions, BidStatus, PaymentStatus
 
 
 class BidIn(BaseModel):
@@ -16,6 +16,10 @@ class BidWinRequest(BaseModel):
 
 
 class BidLostRequest(BaseModel):
+    auction_result_bid: int | None = Field(default=None, ge=0)
+
+
+class BidOnApprovalRequest(BaseModel):
     auction_result_bid: int | None = Field(default=None, ge=0)
 
 

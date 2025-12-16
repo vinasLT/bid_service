@@ -140,6 +140,9 @@ async def bid_on_auction(
             if not account_info.plan:
                 raise BadRequestProblem(detail="You need to buy plan for biding")
 
+            if await bid_service.has_blocking_bids(user_uuid):
+                raise BadRequestProblem(detail="Account is blocked until payment is completed")
+
 
             max_bids_at_one_time = account_info.plan.max_bid_one_time
 
@@ -160,7 +163,7 @@ async def bid_on_auction(
 
             required_amount = data.bid_amount
             if previous_bid:
-                if previous_bid.bid_status in (BidStatus.WON, BidStatus.LOST):
+                if previous_bid.bid_status in (BidStatus.WON, BidStatus.LOST, BidStatus.ON_APPROVAL):
                     raise BadRequestProblem(detail="Auction already finished for this bid")
                 auction_datetime = lot_auction_datetime or previous_bid.auction_date
                 if auction_datetime and auction_datetime <= now_utc:
@@ -259,4 +262,3 @@ async def get_my_bids(
     filter_payload = filters.model_dump(exclude_none=True)
     query = bid_service.build_admin_query(**filter_payload).where(Bid.user_uuid == user.uuid)
     return await paginate(db, query, params)
-

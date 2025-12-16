@@ -182,3 +182,38 @@ async def test_mark_bid_as_lost_reports_notification_failure_without_refund(monk
 
     assert stub.update_calls == []
     assert publisher.closed is True
+
+
+@pytest.mark.asyncio
+async def test_decline_bid_requires_on_approval(monkeypatch):
+    existing_bid = DummyBid(bid_status=BidStatus.WON)
+    stub = BidServiceStub(get_result=existing_bid)
+    override_bid_service(monkeypatch, stub)
+
+    with pytest.raises(BadRequestProblem) as exc_info:
+        await admin.decline_bid(
+            bid_id=existing_bid.id,
+            loss_data=BidLostRequest(),
+            db=object(),
+        )
+    assert exc_info.value.detail == "Bid is not awaiting seller approval"
+
+
+@pytest.mark.asyncio
+async def test_decline_bid_marks_lost_and_unblocks(monkeypatch):
+    existing_bid = DummyBid(bid_status=BidStatus.ON_APPROVAL)
+    lost_bid = DummyBid(bid_status=BidStatus.LOST, account_blocked=False)
+    stub = BidServiceStub(get_result=existing_bid, mark_lost_result=lost_bid)
+    override_bid_service(monkeypatch, stub)
+    override_account_client(monkeypatch, AccountClientStub())
+    publisher = override_publisher(monkeypatch, PublisherStub())
+
+    result = await admin.decline_bid(
+        bid_id=existing_bid.id,
+        loss_data=BidLostRequest(),
+        db=object(),
+    )
+
+    assert result is lost_bid
+    assert stub.mark_bid_as_lost_calls
+    assert publisher.publish_calls[0][0] == "bid.you_lost_bid"

@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.crud.base import BaseService
 from app.database.models import Bid
 from app.database.schemas.bid import BidCreate, BidUpdate
-from app.schemas.bid import Auctions, BidStatus
+from app.schemas.bid_enums import Auctions, BidStatus, PaymentStatus
 
 
 class BidService(BaseService[Bid, BidCreate, BidUpdate]):
@@ -136,6 +136,11 @@ class BidService(BaseService[Bid, BidCreate, BidUpdate]):
             return None
 
         bid.bid_status = BidStatus.WON
+        if bid.payment_status != PaymentStatus.PAID:
+            bid.payment_status = PaymentStatus.PENDING
+            bid.account_blocked = True
+        else:
+            bid.account_blocked = False
         if auction_result_bid is not None:
             bid.auction_result_bid = auction_result_bid
 
@@ -153,9 +158,51 @@ class BidService(BaseService[Bid, BidCreate, BidUpdate]):
             return None
 
         bid.bid_status = BidStatus.LOST
+        bid.payment_status = PaymentStatus.NOT_REQUIRED
+        bid.account_blocked = False
         if auction_result_bid is not None:
             bid.auction_result_bid = auction_result_bid
 
         await self.session.commit()
         await self.session.refresh(bid)
         return bid
+
+    async def mark_bid_as_on_approval(
+        self,
+        bid_id: int,
+        auction_result_bid: int | None = None,
+    ) -> Bid | None:
+        bid = await self.get(bid_id)
+        if not bid:
+            return None
+
+        bid.bid_status = BidStatus.ON_APPROVAL
+        bid.payment_status = PaymentStatus.NOT_REQUIRED
+        bid.account_blocked = True
+        if auction_result_bid is not None:
+            bid.auction_result_bid = auction_result_bid
+
+        await self.session.commit()
+        await self.session.refresh(bid)
+        return bid
+
+    async def mark_payment_as_paid(self, bid_id: int) -> Bid | None:
+        bid = await self.get(bid_id)
+        if not bid:
+            return None
+
+        bid.payment_status = PaymentStatus.PAID
+        bid.account_blocked = False
+
+        await self.session.commit()
+        await self.session.refresh(bid)
+        return bid
+
+    async def has_blocking_bids(self, user_uuid: str) -> bool:
+        stmt = select(func.count()).select_from(Bid).where(
+            Bid.user_uuid == user_uuid,
+            Bid.account_blocked.is_(True),
+        )
+        result = await self.session.execute(stmt)
+        count = result.scalar_one()
+        return count > 0

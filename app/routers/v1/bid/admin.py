@@ -17,7 +17,15 @@ from app.database.schemas.bid import BidRead, BidUpdate
 from app.rpc_client.account import AccountRpcClient
 from app.rpc_client.auth_rcp import AuthRcp
 from app.rpc_client.gen.python.payment.v1 import stripe_pb2
-from app.schemas.bid import BidPage, BidFilters, BidWinRequest, BidLostRequest, BidStatus
+from app.schemas.bid import (
+    BidPage,
+    BidFilters,
+    BidWinRequest,
+    BidLostRequest,
+    BidOnApprovalRequest,
+    BidStatus,
+    PaymentStatus,
+)
 from app.services.rabbit_service import RabbitMQPublisher
 
 bids_management_router = APIRouter(prefix='/bids')
@@ -53,6 +61,8 @@ def _build_bid_notification_payload(bid: Bid, email: str | None, phone_number: s
         "auction_date": _serialize_datetime(bid.auction_date),
         "vin": bid.vin,
         "bid_status": bid_status_value,
+        "payment_status": getattr(bid.payment_status, "value", bid.payment_status),
+        "account_blocked": getattr(bid, "account_blocked", None),
         'email': email,
         'phone_number': phone_number,
     }
@@ -84,6 +94,33 @@ async def get_all_bids(
 
 
 @bids_management_router.post(
+    '/{bid_id}/on-approval',
+    response_model=BidRead,
+    description=f'Mark bid as on approval and block account pending seller decision, required_permission: {Permissions.BID_ALL_WRITE.value}',
+    dependencies=[Depends(require_permissions(Permissions.BID_ALL_WRITE))],
+)
+async def mark_bid_as_on_approval(
+    bid_id: int,
+    data: BidOnApprovalRequest = Body(...),
+    db: AsyncSession = Depends(get_async_db),
+):
+    bid_service = BidService(db)
+    existing_bid = await bid_service.get(bid_id)
+    if existing_bid is None:
+        raise BadRequestProblem(detail="Bid not found")
+    if existing_bid.bid_status in (BidStatus.WON, BidStatus.LOST, BidStatus.ON_APPROVAL):
+        raise BadRequestProblem(detail="Bid cannot be set to approval in current state")
+
+    bid = await bid_service.mark_bid_as_on_approval(
+        bid_id=bid_id,
+        auction_result_bid=data.auction_result_bid,
+    )
+    if bid is None:
+        raise BadRequestProblem(detail="Bid not found")
+    return bid
+
+
+@bids_management_router.post(
     '/{bid_id}/won',
     response_model=BidRead,
     description=f'Mark bid as won and notify the user, required_permission: {Permissions.BID_ALL_WRITE.value}',
@@ -103,6 +140,8 @@ async def mark_bid_as_won(
 
     previous_status = existing_bid.bid_status
     previous_result = existing_bid.auction_result_bid
+    previous_payment_status = existing_bid.payment_status
+    previous_account_blocked = existing_bid.account_blocked
     bid = await bid_service.mark_bid_as_won(
         bid_id=bid_id,
         auction_result_bid=win_data.auction_result_bid,
@@ -126,6 +165,8 @@ async def mark_bid_as_won(
             BidUpdate(
                 bid_status=previous_status,
                 auction_result_bid=previous_result,
+                payment_status=previous_payment_status,
+                account_blocked=previous_account_blocked,
             ),
         )
         raise BadRequestProblem(detail=f"Failed to send notification: {exc}")
@@ -133,6 +174,27 @@ async def mark_bid_as_won(
         await publisher.close()
 
     return bid
+
+
+@bids_management_router.post(
+    '/{bid_id}/approve',
+    response_model=BidRead,
+    description=f'Seller approves bid -> mark as won, required_permission: {Permissions.BID_ALL_WRITE.value}',
+    dependencies=[Depends(require_permissions(Permissions.BID_ALL_WRITE))],
+)
+async def approve_bid(
+    bid_id: int,
+    win_data: BidWinRequest = Body(...),
+    db: AsyncSession = Depends(get_async_db),
+):
+    bid_service = BidService(db)
+    existing_bid = await bid_service.get(bid_id)
+    if existing_bid is None:
+        raise BadRequestProblem(detail="Bid not found")
+    if existing_bid.bid_status != BidStatus.ON_APPROVAL:
+        raise BadRequestProblem(detail="Bid is not awaiting seller approval")
+
+    return await mark_bid_as_won(bid_id=bid_id, win_data=win_data, db=db)
 
 @bids_management_router.get('/for-user', response_model=BidPage, description=f'Get bids for user, required_permission: {Permissions.BID_ALL_READ.value}',
                             dependencies=[Depends(require_permissions(Permissions.BID_ALL_READ))])
@@ -169,6 +231,8 @@ async def mark_bid_as_lost(
     refund_required = existing_bid.bid_status != BidStatus.LOST
     previous_status = existing_bid.bid_status
     previous_result = existing_bid.auction_result_bid
+    previous_payment_status = existing_bid.payment_status
+    previous_account_blocked = existing_bid.account_blocked
 
     bid = existing_bid
 
@@ -194,6 +258,8 @@ async def mark_bid_as_lost(
                 BidUpdate(
                     bid_status=previous_status,
                     auction_result_bid=previous_result,
+                    payment_status=previous_payment_status,
+                    account_blocked=previous_account_blocked,
                 ),
             )
             raise_rpc_problem("Account", exc)
@@ -217,4 +283,50 @@ async def mark_bid_as_lost(
     finally:
         await publisher.close()
 
+    return bid
+
+
+@bids_management_router.post(
+    '/{bid_id}/decline',
+    response_model=BidRead,
+    description=f'Seller declines bid -> mark as lost and unblock account, required_permission: {Permissions.BID_ALL_WRITE.value}',
+    dependencies=[Depends(require_permissions(Permissions.BID_ALL_WRITE))],
+)
+async def decline_bid(
+    bid_id: int,
+    loss_data: BidLostRequest = Body(...),
+    db: AsyncSession = Depends(get_async_db),
+):
+    bid_service = BidService(db)
+    existing_bid = await bid_service.get(bid_id)
+    if existing_bid is None:
+        raise BadRequestProblem(detail="Bid not found")
+    if existing_bid.bid_status != BidStatus.ON_APPROVAL:
+        raise BadRequestProblem(detail="Bid is not awaiting seller approval")
+
+    return await mark_bid_as_lost(bid_id=bid_id, loss_data=loss_data, db=db)
+
+
+@bids_management_router.post(
+    '/{bid_id}/paid',
+    response_model=BidRead,
+    description=f'Mark payment as paid for won bid and unblock account, required_permission: {Permissions.BID_ALL_WRITE.value}',
+    dependencies=[Depends(require_permissions(Permissions.BID_ALL_WRITE))],
+)
+async def mark_payment_as_paid(
+    bid_id: int,
+    db: AsyncSession = Depends(get_async_db),
+):
+    bid_service = BidService(db)
+    existing_bid = await bid_service.get(bid_id)
+    if existing_bid is None:
+        raise BadRequestProblem(detail="Bid not found")
+    if existing_bid.bid_status != BidStatus.WON:
+        raise BadRequestProblem(detail="Only won bids can be marked as paid")
+    if existing_bid.payment_status == PaymentStatus.PAID:
+        raise BadRequestProblem(detail="Payment already marked as paid")
+
+    bid = await bid_service.mark_payment_as_paid(bid_id)
+    if bid is None:
+        raise BadRequestProblem(detail="Bid not found")
     return bid
