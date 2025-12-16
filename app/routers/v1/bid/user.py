@@ -219,6 +219,10 @@ async def bid_on_auction(
     try:
         await publisher.connect()
         await publisher.publish(routing_key="bid.new_bid_placed", payload=payload)
+
+        payload['destination'] = 'telegram'
+
+        await publisher.publish(routing_key="bid.new_bid_placed", payload=payload)
     finally:
         await publisher.close()
 
