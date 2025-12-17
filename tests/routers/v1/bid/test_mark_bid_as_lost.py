@@ -193,7 +193,6 @@ async def test_decline_bid_requires_on_approval(monkeypatch):
     with pytest.raises(BadRequestProblem) as exc_info:
         await admin.decline_bid(
             bid_id=existing_bid.id,
-            loss_data=BidLostRequest(),
             db=object(),
         )
     assert exc_info.value.detail == "Bid is not awaiting seller approval"
@@ -210,10 +209,9 @@ async def test_decline_bid_marks_lost_and_unblocks(monkeypatch):
 
     result = await admin.decline_bid(
         bid_id=existing_bid.id,
-        loss_data=BidLostRequest(),
         db=object(),
     )
 
     assert result is lost_bid
-    assert stub.mark_bid_as_lost_calls
+    assert stub.mark_bid_as_lost_calls == [{"bid_id": existing_bid.id, "auction_result_bid": None}]
     assert publisher.publish_calls[0][0] == "bid.you_lost_bid"

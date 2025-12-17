@@ -184,7 +184,6 @@ async def mark_bid_as_won(
 )
 async def approve_bid(
     bid_id: int,
-    win_data: BidWinRequest = Body(...),
     db: AsyncSession = Depends(get_async_db),
 ):
     bid_service = BidService(db)
@@ -194,7 +193,7 @@ async def approve_bid(
     if existing_bid.bid_status != BidStatus.ON_APPROVAL:
         raise BadRequestProblem(detail="Bid is not awaiting seller approval")
 
-    return await mark_bid_as_won(bid_id=bid_id, win_data=win_data, db=db)
+    return await mark_bid_as_won(bid_id=bid_id, win_data=BidWinRequest(), db=db)
 
 @bids_management_router.get('/for-user', response_model=BidPage, description=f'Get bids for user, required_permission: {Permissions.BID_ALL_READ.value}',
                             dependencies=[Depends(require_permissions(Permissions.BID_ALL_READ))])
@@ -294,7 +293,6 @@ async def mark_bid_as_lost(
 )
 async def decline_bid(
     bid_id: int,
-    loss_data: BidLostRequest = Body(...),
     db: AsyncSession = Depends(get_async_db),
 ):
     bid_service = BidService(db)
@@ -304,7 +302,7 @@ async def decline_bid(
     if existing_bid.bid_status != BidStatus.ON_APPROVAL:
         raise BadRequestProblem(detail="Bid is not awaiting seller approval")
 
-    return await mark_bid_as_lost(bid_id=bid_id, loss_data=loss_data, db=db)
+    return await mark_bid_as_lost(bid_id=bid_id, loss_data=BidLostRequest(), db=db)
 
 
 @bids_management_router.post(

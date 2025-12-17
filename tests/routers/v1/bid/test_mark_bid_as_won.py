@@ -155,7 +155,6 @@ async def test_approve_bid_requires_on_approval(monkeypatch):
     with pytest.raises(BadRequestProblem) as exc_info:
         await admin.approve_bid(
             bid_id=existing_bid.id,
-            win_data=BidWinRequest(),
             db=object(),
         )
     assert exc_info.value.detail == "Bid is not awaiting seller approval"
@@ -171,12 +170,11 @@ async def test_approve_bid_flows_through_mark_won(monkeypatch):
 
     result = await admin.approve_bid(
         bid_id=existing_bid.id,
-        win_data=BidWinRequest(auction_result_bid=existing_bid.bid_amount),
         db=object(),
     )
 
     assert result is won_bid
-    assert stub.mark_bid_as_won_calls
+    assert stub.mark_bid_as_won_calls == [{"bid_id": existing_bid.id, "auction_result_bid": None}]
     assert publisher.publish_calls[0][0] == "bid.you_won_bid"
 
 
