@@ -212,6 +212,7 @@ async def bid_on_auction(
         "vehicle_image": lot_payload.get("images").split(',')[0] if lot_payload.get("images") else None,
         "auction": data.auction.value,
         "lot_id": data.lot_id,
+        "is_bid_up": bid.bid_amount > current_bid_amount,
         "current_bid": current_bid_amount,
         "auction_date": str(lot_payload.get("auction_date")),
         'email': user.email,
