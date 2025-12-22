@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     RPC_API_URL: str = "localhost:50051"
     RPC_PAYMENT_URL: str = "localhost:50053"
     RPC_AUTH_URL: str = "localhost:50054"
+    RPC_CALCULATOR_URL: str = "localhost:50052"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
