@@ -13,9 +13,11 @@ from tests.routers.v1.bid.stubs import (
     ApiRpcClientStub,
     AccountClientStub,
     BidPlacementServiceStub,
+    CalculatorRpcClientStub,
     DummyBid,
     PublisherStub,
     override_auction_client,
+    override_calculator_client,
     override_user_account_client,
     override_user_bid_service,
     override_user_publisher,
@@ -32,12 +34,14 @@ def _make_lot_data(**overrides):
         "vin": "VIN123",
         "odometer": 12000,
         "location": "Some Yard",
+        "location_offsite": None,
         "damage_pr": "front",
         "damage_sec": "side",
         "fuel": "gasoline",
         "transmission": "automatic",
         "engine_size": "2.0",
         "cylinders": "4",
+        "vehicle_type": "car",
         "seller": "Seller Inc",
         "document": "Clean",
         "status": "run_and_drive",
@@ -48,6 +52,7 @@ def _make_lot_data(**overrides):
 
 def _setup_defaults(monkeypatch, *, api_stub=None, account_stub=None, bid_stub=None, publisher_stub=None):
     override_auction_client(monkeypatch, api_stub or ApiRpcClientStub(lot_items=[_make_lot_data()]))
+    override_calculator_client(monkeypatch, CalculatorRpcClientStub())
     override_user_account_client(
         monkeypatch,
         account_stub

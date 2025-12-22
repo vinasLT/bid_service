@@ -287,6 +287,27 @@ class ApiRpcClientStub:
         return SimpleNamespace(current_bid=current_bid)
 
 
+class CalculatorRpcClientStub:
+    def __init__(self, *, exc: Exception | None = None, response: object | None = None):
+        self.exc = exc
+        self.response = response or SimpleNamespace(success=True)
+        self.calls: list[dict] = []
+
+    async def __aenter__(self):
+        if self.exc:
+            raise self.exc
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def get_calculator_with_data(self, **kwargs):
+        if self.exc:
+            raise self.exc
+        self.calls.append(kwargs)
+        return self.response
+
+
 def override_bid_service(monkeypatch, stub: BidServiceStub):
     monkeypatch.setattr(admin, "BidService", lambda db: stub)
     return stub
@@ -324,4 +345,9 @@ def override_user_account_client(monkeypatch, stub: AccountClientStub):
 
 def override_auction_client(monkeypatch, stub: ApiRpcClientStub):
     monkeypatch.setattr(user, "ApiRpcClient", lambda: stub)
+    return stub
+
+
+def override_calculator_client(monkeypatch, stub: CalculatorRpcClientStub):
+    monkeypatch.setattr(user, "CalculatorRpcClient", lambda: stub)
     return stub
