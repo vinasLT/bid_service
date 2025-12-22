@@ -12,6 +12,7 @@ from rfc9457 import BadRequestProblem
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Permissions
+from app.core.logger import logger
 from app.core.utils import raise_rpc_problem
 from app.database.crud import BidService
 from app.database.db.session import get_async_db
@@ -19,6 +20,7 @@ from app.database.models import Bid
 from app.database.schemas.bid import BidCreate, BidRead, BidUpdate
 from app.rpc_client.account import AccountRpcClient
 from app.rpc_client.auction_api import ApiRpcClient
+from app.rpc_client.calculator import CalculatorRpcClient
 from app.schemas.bid import BidIn, GetMyBidIn, BidPage, BidFilters
 from app.schemas.bid_enums import BidStatus
 from app.rpc_client.gen.python.payment.v1 import stripe_pb2
@@ -127,7 +129,22 @@ async def bid_on_auction(
             if current_bid_amount and current_bid_amount > data.bid_amount:
                 raise BadRequestProblem(detail="Current bid on auction is higher")
     except grpc.aio.AioRpcError as exc:
+        logger.exception(f"Error while requesting api service: {exc.details()}")
         raise_rpc_problem("Auction", exc)
+
+
+    try:
+        async with CalculatorRpcClient() as client:
+            response = await client.get_calculator_with_data(
+                price=data.bid_amount,
+                auction=data.auction.value,
+                vehicle_type=lot_data.vehicle_type,
+                location=lot_data.location_offsite if lot_data.location_offsite else lot_data.location
+            )
+    except grpc.aio.AioRpcError as exc:
+        logger.exception(f"Error while requesting calculator service: {exc.details()}")
+        raise_rpc_problem("Calculator", exc)
+
 
     if lot_payload is None:
         raise BadRequestProblem(detail="Unable to read lot data")
