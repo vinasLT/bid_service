@@ -138,7 +138,7 @@ async def bid_on_auction(
             response = await client.get_calculator_with_data(
                 price=data.bid_amount,
                 auction=data.auction.value,
-                vehicle_type=lot_data.vehicle_type,
+                vehicle_type="CAR" if lot_data.vehicle_type.lower() == "automobile" else "MOTO",
                 location=lot_data.location_offsite if lot_data.location_offsite else lot_data.location
             )
     except grpc.aio.AioRpcError as exc:
