@@ -46,7 +46,7 @@ def _make_lot_data(**overrides):
         "document": "Clean",
         "status": "run_and_drive",
         "is_buynow": False,
-        "purchase_price": None,
+        "price_new": None,
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)

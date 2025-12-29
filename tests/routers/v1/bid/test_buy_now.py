@@ -44,7 +44,7 @@ def _make_lot_data(**overrides):
         "document": "Clean",
         "status": "run_and_drive",
         "is_buynow": True,
-        "purchase_price": 15_000,
+        "price_new": 15_000,
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
@@ -80,7 +80,7 @@ def _call_buy_now(data: BuyNowIn, user_uuid: str = "user-123"):
 
 @pytest.mark.asyncio
 async def test_buy_now_rejects_when_buy_now_not_available(monkeypatch):
-    api_stub = ApiRpcClientStub(lot_items=[_make_lot_data(is_buynow=False, purchase_price=None)])
+    api_stub = ApiRpcClientStub(lot_items=[_make_lot_data(is_buynow=False, price_new=None)])
     _setup_defaults(monkeypatch, api_stub=api_stub)
 
     with pytest.raises(BadRequestProblem) as exc_info:
@@ -131,3 +131,114 @@ async def test_buy_now_creates_bid_and_publishes_notification(monkeypatch):
     assert payload["payment_status"] == "pending"
     assert payload["account_blocked"] is True
     assert payload["email"] == "user@example.com"
+
+
+@pytest.mark.asyncio
+async def test_buy_now_rejects_when_lot_not_found(monkeypatch):
+    api_stub = ApiRpcClientStub(lot_items=[])
+    _setup_defaults(monkeypatch, api_stub=api_stub)
+
+    with pytest.raises(BadRequestProblem) as exc_info:
+        await _call_buy_now(BuyNowIn(lot_id=2, auction=Auctions.COPART))
+
+    assert exc_info.value.detail == "Lot not found"
+
+
+@pytest.mark.asyncio
+async def test_buy_now_rejects_closed_auction(monkeypatch):
+    api_stub = ApiRpcClientStub(lot_items=[_make_lot_data(form_get_type="history")])
+    _setup_defaults(monkeypatch, api_stub=api_stub)
+
+    with pytest.raises(BadRequestProblem) as exc_info:
+        await _call_buy_now(BuyNowIn(lot_id=3, auction=Auctions.COPART))
+
+    assert exc_info.value.detail == "Auction is closed"
+
+
+@pytest.mark.asyncio
+async def test_buy_now_rejects_when_price_missing(monkeypatch):
+    api_stub = ApiRpcClientStub(lot_items=[_make_lot_data(price_new=None)])
+    _setup_defaults(monkeypatch, api_stub=api_stub)
+
+    with pytest.raises(BadRequestProblem) as exc_info:
+        await _call_buy_now(BuyNowIn(lot_id=4, auction=Auctions.COPART))
+
+    assert exc_info.value.detail == "Buy now is not available for this lot"
+
+
+@pytest.mark.asyncio
+async def test_buy_now_rejects_when_price_zero_or_negative(monkeypatch):
+    api_stub = ApiRpcClientStub(lot_items=[_make_lot_data(price_new=0)])
+    _setup_defaults(monkeypatch, api_stub=api_stub)
+
+    with pytest.raises(BadRequestProblem):
+        await _call_buy_now(BuyNowIn(lot_id=5, auction=Auctions.COPART))
+
+    api_stub = ApiRpcClientStub(lot_items=[_make_lot_data(price_new=-500)])
+    _setup_defaults(monkeypatch, api_stub=api_stub)
+
+    with pytest.raises(BadRequestProblem):
+        await _call_buy_now(BuyNowIn(lot_id=6, auction=Auctions.COPART))
+
+
+@pytest.mark.asyncio
+async def test_buy_now_accepts_string_price(monkeypatch):
+    api_stub = ApiRpcClientStub(lot_items=[_make_lot_data(price_new="15000")])
+    bid_stub = BidPlacementServiceStub(create_result=DummyBid(bid_amount=15_000, is_buy_now=True))
+    account_stub = AccountClientStub(account_info=SimpleNamespace(balance=20_000))
+
+    _setup_defaults(monkeypatch, api_stub=api_stub, bid_stub=bid_stub, account_stub=account_stub)
+
+    result = await _call_buy_now(BuyNowIn(lot_id=7, auction=Auctions.COPART))
+
+    assert result is bid_stub.create_result
+    created_payload = bid_stub.create_calls[0]
+    assert created_payload.bid_amount == 15_000
+
+
+@pytest.mark.asyncio
+async def test_buy_now_rejects_when_no_plan(monkeypatch):
+    api_stub = ApiRpcClientStub(lot_items=[_make_lot_data()])
+    account_stub = AccountClientStub(account_info=SimpleNamespace(balance=20_000, plan=None))
+    _setup_defaults(monkeypatch, api_stub=api_stub, account_stub=account_stub)
+
+    with pytest.raises(BadRequestProblem) as exc_info:
+        await _call_buy_now(BuyNowIn(lot_id=8, auction=Auctions.COPART))
+
+    assert exc_info.value.detail == "You need to buy plan for biding"
+
+
+@pytest.mark.asyncio
+async def test_buy_now_rejects_when_account_blocked(monkeypatch):
+    api_stub = ApiRpcClientStub(lot_items=[_make_lot_data()])
+    bid_stub = BidPlacementServiceStub(blocking=True)
+    _setup_defaults(monkeypatch, api_stub=api_stub, bid_stub=bid_stub)
+
+    with pytest.raises(BadRequestProblem) as exc_info:
+        await _call_buy_now(BuyNowIn(lot_id=9, auction=Auctions.COPART))
+
+    assert exc_info.value.detail == "Account is blocked until payment is completed"
+
+
+@pytest.mark.asyncio
+async def test_buy_now_rejects_when_user_already_has_bid(monkeypatch):
+    api_stub = ApiRpcClientStub(lot_items=[_make_lot_data()])
+    bid_stub = BidPlacementServiceStub(user_bid=DummyBid())
+    _setup_defaults(monkeypatch, api_stub=api_stub, bid_stub=bid_stub)
+
+    with pytest.raises(BadRequestProblem) as exc_info:
+        await _call_buy_now(BuyNowIn(lot_id=10, auction=Auctions.COPART))
+
+    assert exc_info.value.detail == "You already placed a bid for this lot"
+
+
+@pytest.mark.asyncio
+async def test_buy_now_rejects_when_not_enough_money(monkeypatch):
+    api_stub = ApiRpcClientStub(lot_items=[_make_lot_data(price_new=18_000)])
+    account_stub = AccountClientStub(account_info=SimpleNamespace(balance=5_000))
+    _setup_defaults(monkeypatch, api_stub=api_stub, account_stub=account_stub)
+
+    with pytest.raises(BadRequestProblem) as exc_info:
+        await _call_buy_now(BuyNowIn(lot_id=11, auction=Auctions.COPART))
+
+    assert exc_info.value.detail == "Not enough money"

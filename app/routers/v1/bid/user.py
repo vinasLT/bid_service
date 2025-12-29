@@ -91,7 +91,7 @@ def _get_buy_now_price(lot_data) -> int | None:
     is_buy_now = _get_proto_value(lot_data, "is_buynow")
     if not is_buy_now:
         return None
-    raw_price = _get_proto_value(lot_data, "purchase_price")
+    raw_price = _get_proto_value(lot_data, "price_new")
     if raw_price is None:
         return None
     if isinstance(raw_price, str):
