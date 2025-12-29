@@ -5,7 +5,7 @@ import grpc
 from AuthTools import HeaderUser
 from AuthTools.Permissions.dependencies import require_permissions
 from fastapi import APIRouter, Body
-from fastapi.params import Depends, Param
+from fastapi.params import Depends
 from fastapi_pagination import Params
 from fastapi_pagination.ext.sqlalchemy import paginate
 from rfc9457 import BadRequestProblem
@@ -19,10 +19,11 @@ from app.database.db.session import get_async_db
 from app.database.models import Bid
 from app.database.schemas.bid import BidCreate, BidRead, BidUpdate
 from app.rpc_client.account import AccountRpcClient
+from app.rpc_client.auth_rcp import AuthRcp
 from app.rpc_client.auction_api import ApiRpcClient
 from app.rpc_client.calculator import CalculatorRpcClient
-from app.schemas.bid import BidIn, GetMyBidIn, BidPage, BidFilters
-from app.schemas.bid_enums import BidStatus
+from app.schemas.bid import BidIn, BuyNowIn, GetMyBidIn, BidPage, BidFilters
+from app.schemas.bid_enums import BidStatus, PaymentStatus
 from app.rpc_client.gen.python.payment.v1 import stripe_pb2
 from app.services.rabbit_service import RabbitMQPublisher
 
@@ -84,6 +85,72 @@ def _build_bid_payload(lot_data, *, auction_datetime: datetime | None = None) ->
         "document": _get_proto_value(lot_data, "document"),
         "status": _get_proto_value(lot_data, "status"),
     }
+
+
+def _get_buy_now_price(lot_data) -> int | None:
+    is_buy_now = _get_proto_value(lot_data, "is_buynow")
+    if not is_buy_now:
+        return None
+    raw_price = _get_proto_value(lot_data, "purchase_price")
+    if raw_price is None:
+        return None
+    if isinstance(raw_price, str):
+        raw_price = raw_price.strip()
+        if not raw_price:
+            return None
+    try:
+        price = int(raw_price)
+    except (TypeError, ValueError):
+        return None
+    if price <= 0:
+        return None
+    return price
+
+
+def _extract_primary_image(images: str | None) -> str | None:
+    if not images:
+        return None
+    first_image = images.split(",")[0].strip()
+    return first_image or None
+
+
+def _serialize_datetime(value):
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _build_bid_notification_payload(bid: Bid, email: str | None, phone_number: str | None):
+    auction_value = bid.auction.value if hasattr(bid.auction, "value") else bid.auction
+    bid_status_value = bid.bid_status.value if hasattr(bid.bid_status, "value") else bid.bid_status
+    return {
+        "user_uuid": bid.user_uuid,
+        "bid_id": bid.id,
+        "lot_id": bid.lot_id,
+        "auction": auction_value,
+        "bid_amount": bid.bid_amount,
+        "final_bid": bid.auction_result_bid,
+        "vehicle_title": bid.title,
+        "vehicle_image": _extract_primary_image(bid.images),
+        "auction_date": _serialize_datetime(bid.auction_date),
+        "vin": bid.vin,
+        "bid_status": bid_status_value,
+        "payment_status": getattr(bid.payment_status, "value", bid.payment_status),
+        "account_blocked": getattr(bid, "account_blocked", None),
+        "email": email,
+        "phone_number": phone_number,
+    }
+
+
+async def _get_user_contacts(user_uuid: str) -> tuple[Any | None, Any | None] | None:
+    try:
+        async with AuthRcp() as auth_client:
+            response = await auth_client.get_user(user_uuid=user_uuid)
+            return response.email or None, response.phone_number or None
+    except grpc.aio.AioRpcError as exc:
+        raise_rpc_problem("Auth", exc)
 
 
 
@@ -249,6 +316,103 @@ async def bid_on_auction(
 
     return bid
 
+
+@user_bids_router.post(
+    '/bid/buy-now',
+    response_model=BidRead,
+    description=f'Buy now on some lot on auction, required_permission: {Permissions.BID_WRITE.value}',
+)
+async def buy_now_on_auction(
+    db: AsyncSession = Depends(get_async_db),
+    data: BuyNowIn = Body(...),
+    user: HeaderUser = Depends(require_permissions(Permissions.BID_WRITE)),
+):
+    user_uuid = user.uuid
+    bid_service = BidService(db)
+
+    lot_payload: dict[str, Any] | None = None
+    buy_now_price: int | None = None
+    try:
+        async with ApiRpcClient() as auction_client:
+            lot_response = await auction_client.get_lot_by_vin_or_lot_id(
+                vin_or_lot_id=str(data.lot_id), site=data.auction.value
+            )
+            if not lot_response.lot:
+                raise BadRequestProblem(detail="Lot not found")
+
+            lot_data = lot_response.lot[0]
+            if lot_data.form_get_type == 'history':
+                raise BadRequestProblem(detail="Auction is closed")
+
+            lot_payload = _build_bid_payload(lot_data)
+            buy_now_price = _get_buy_now_price(lot_data)
+            if buy_now_price is None:
+                raise BadRequestProblem(detail="Buy now is not available for this lot")
+    except grpc.aio.AioRpcError as exc:
+        logger.exception(f"Error while requesting api service: {exc.details()}")
+        raise_rpc_problem("Auction", exc)
+
+    if lot_payload is None or buy_now_price is None:
+        raise BadRequestProblem(detail="Unable to read lot data")
+
+    bid = None
+    try:
+        async with AccountRpcClient() as account_client:
+            account_info = await account_client.get_account_info(user_uuid=user_uuid)
+
+            if not account_info.plan:
+                raise BadRequestProblem(detail="You need to buy plan for biding")
+
+            if await bid_service.has_blocking_bids(user_uuid):
+                raise BadRequestProblem(detail="Account is blocked until payment is completed")
+
+            previous_bid = await bid_service.get_user_bid_for_lot(user_uuid, data.auction, data.lot_id)
+            if previous_bid:
+                raise BadRequestProblem(detail="You already placed a bid for this lot")
+
+            if account_info.balance < buy_now_price:
+                raise BadRequestProblem(detail="Not enough money")
+
+            bid = await bid_service.create(
+                BidCreate(
+                    lot_id=data.lot_id,
+                    bid_amount=buy_now_price,
+                    user_uuid=user_uuid,
+                    auction=data.auction,
+                    bid_status=BidStatus.WON,
+                    payment_status=PaymentStatus.PENDING,
+                    account_blocked=True,
+                    is_buy_now=True,
+                    auction_result_bid=buy_now_price,
+                    **lot_payload,
+                )
+            )
+
+            await account_client.create_transaction(
+                user_uuid=user_uuid,
+                transaction_type=stripe_pb2.TransactionType.TRANSACTION_TYPE_BID_PLACEMENT,
+                amount=-buy_now_price,
+            )
+    except grpc.aio.AioRpcError as exc:
+        raise_rpc_problem("Payment", exc)
+
+    if bid is None:
+        raise BadRequestProblem(detail="Bid was not created")
+
+    email, phone_number = await _get_user_contacts(user_uuid)
+    payload = _build_bid_notification_payload(bid, email=email, phone_number=phone_number)
+
+    publisher = RabbitMQPublisher()
+    try:
+        await publisher.connect()
+        await publisher.publish(routing_key="bid.you_won_bid", payload=payload)
+
+        payload["destination"] = "telegram"
+        await publisher.publish(routing_key="bid.you_won_bid", payload=payload)
+    finally:
+        await publisher.close()
+
+    return bid
 @user_bids_router.get(
     '/bid/my-bid',
     response_model=BidRead,

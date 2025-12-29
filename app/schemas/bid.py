@@ -11,6 +11,11 @@ class BidIn(BaseModel):
     bid_amount: int
 
 
+class BuyNowIn(BaseModel):
+    lot_id: int
+    auction: Auctions
+
+
 class BidWinRequest(BaseModel):
     auction_result_bid: int | None = Field(default=None, ge=0)
 

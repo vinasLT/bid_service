@@ -15,6 +15,7 @@ class DummyBid:
     bid_status: BidStatus = BidStatus.WAITING_AUCTION_RESULT
     payment_status: PaymentStatus = PaymentStatus.NOT_REQUIRED
     account_blocked: bool = False
+    is_buy_now: bool = False
     bid_amount: int = 10_000
     auction_result_bid: int | None = None
     title: str = "Some vehicle"
@@ -350,4 +351,9 @@ def override_auction_client(monkeypatch, stub: ApiRpcClientStub):
 
 def override_calculator_client(monkeypatch, stub: CalculatorRpcClientStub):
     monkeypatch.setattr(user, "CalculatorRpcClient", lambda: stub)
+    return stub
+
+
+def override_user_auth_client(monkeypatch, stub: AuthClientStub):
+    monkeypatch.setattr(user, "AuthRcp", lambda: stub)
     return stub

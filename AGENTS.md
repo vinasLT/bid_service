@@ -1,29 +1,31 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `app/` contains the FastAPI service: `routers/` (HTTP endpoints), `database/` (SQLAlchemy models, sessions, Alembic migrations), `schemas/` (Pydantic DTOs), `services/` (infrastructure such as RabbitMQ), and `rpc_client/` (gRPC integrations). `app/main.py` wires the FastAPI application.
-- `alembic/` plus `alembic.ini` hold migration scripts and configuration.
-- `tests/` mirrors the router layout (`tests/routers/v1/...`). When adding new endpoints, create sibling test modules to keep scopes focused.
-- Shared enums, utilities, and configuration live in `app/core/` and `app/config.py`. Reuse them rather than redefining constants in feature modules.
+- `app/` holds the FastAPI service. Key areas: `routers/` (HTTP endpoints), `database/` (SQLAlchemy models, CRUD, sessions, Alembic), `schemas/` (Pydantic DTOs), `services/` (infra like RabbitMQ), and `rpc_client/` (gRPC integrations). `app/main.py` wires the app.
+- `alembic/` and `alembic.ini` manage migrations.
+- `tests/` mirrors router layout (e.g., `tests/routers/v1/bid/`). Add sibling test modules when adding endpoints.
 
 ## Build, Test, and Development Commands
-- `poetry install` – sets up the Python 3.13 environment with runtime and dev dependencies.
-- `uvicorn app.main:app --reload` – runs the FastAPI server locally with auto-reload for rapid development.
-- `pytest` or `pytest tests/routers/v1/bid` – executes the async pytest suite (strict asyncio mode). Use `-k` to target specific endpoints.
-- `alembic upgrade head` – applies the latest DB migrations (ensure `DATABASE_URL` is configured).
+- `poetry install` sets up the Python 3.13 environment and dev deps.
+- `uvicorn app.main:app --reload` runs the API locally with auto-reload.
+- `pytest` or `pytest tests/routers/v1/bid -k <pattern>` runs async test suites.
+- `alembic upgrade head` applies the latest database migrations (requires `DATABASE_URL`).
 
 ## Coding Style & Naming Conventions
-- Follow PEP 8 with 4-space indentation, typed function signatures, and snake_case for modules, functions, and variables. Use PascalCase for Pydantic models and Enums.
+- Follow PEP 8, 4-space indentation, and type-annotated function signatures.
+- Use snake_case for modules/functions/variables, PascalCase for Pydantic models and Enums.
 - Prefer dependency injection via `Depends(...)` inside routers; avoid instantiating services at import time.
-- Keep FastAPI routers in `app/routers/<version>/<resource>.py`, with helper functions defined above their route handlers.
-- Reuse shared helpers (e.g., `_build_bid_payload`) or move new ones into the nearest module-level utility block to keep routers concise.
+- Keep helper functions above route handlers; reuse shared helpers in `app/core/` or module utility blocks.
 
 ## Testing Guidelines
-- Pytest with `pytest-asyncio` powers all tests. Name files `test_<feature>.py`; name coroutines `test_<behavior>`.
-- Use the stubs in `tests/routers/v1/bid/stubs.py` when mocking BidService, RPC clients, or RabbitMQ—extend this module instead of redefining fixtures.
-- Always validate both success paths and failure cases (e.g., RPC errors, validation guards) before opening a PR. CI expects `pytest` to pass without `-s`.
+- Tests use `pytest` with `pytest-asyncio` (strict async). Name files `test_<feature>.py` and coroutines `test_<behavior>`.
+- Use stubs in `tests/routers/v1/bid/stubs.py` for BidService/RPC/RabbitMQ mocks; extend them rather than duplicating fixtures.
+- Cover success and failure paths (validation guards, RPC errors, edge cases).
 
 ## Commit & Pull Request Guidelines
-- Write imperative, descriptive commits (e.g., `Add bid placement tests`) and keep changes scoped.
-- Pull requests should include: problem statement, summary of changes, screenshots/logs for user-facing or ops-visible updates, and explicit test evidence (`pytest ...` output).
-- Link to tracking tickets or issues when available, and call out breaking changes or new environment variables in the PR description.
+- Commit messages are imperative and descriptive (e.g., "Add bid placement tests"). Keep changes scoped.
+- PRs should include: problem statement, summary, test evidence (`pytest ...`), and screenshots/logs for user-facing or ops-visible changes. Link issues and call out breaking changes or new env vars.
+
+## Configuration & Environment
+- App configuration lives in `app/config.py`; set required env vars (e.g., `DATABASE_URL`) before running migrations.
+- gRPC stubs live under `app/rpc_client/gen/`; do not hand-edit generated files.

@@ -12,6 +12,7 @@ class BidBase(BaseModel):
     bid_status: BidStatus = BidStatus.WAITING_AUCTION_RESULT
     payment_status: PaymentStatus = PaymentStatus.NOT_REQUIRED
     account_blocked: bool = False
+    is_buy_now: bool = False
     auction_result_bid: int | None = None
 
     title: str | None = None
@@ -44,6 +45,7 @@ class BidUpdate(BaseModel):
     bid_status: BidStatus | None = None
     payment_status: PaymentStatus | None = None
     account_blocked: bool | None = None
+    is_buy_now: bool | None = None
     auction_result_bid: int | None = None
 
     title: str | None = None

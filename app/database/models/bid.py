@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Enum, func, text
+from sqlalchemy import Boolean, DateTime, Enum, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.models import Base
@@ -22,6 +22,7 @@ class Bid(Base):
         default=PaymentStatus.NOT_REQUIRED,
     )
     account_blocked: Mapped[bool] = mapped_column(nullable=False, default=False)
+    is_buy_now: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     bid_amount: Mapped[int] = mapped_column(nullable=False)
     auction_result_bid: Mapped[int] = mapped_column(nullable=True)
@@ -55,5 +56,4 @@ class Bid(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
-
 
