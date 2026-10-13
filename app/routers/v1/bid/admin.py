@@ -46,7 +46,7 @@ def _serialize_datetime(value):
     return str(value)
 
 
-def     _build_bid_notification_payload(bid: Bid, email: str | None, phone_number: str | None):
+def _build_bid_notification_payload(bid: Bid, email: str | None, phone_number: str | None):
     auction_value = bid.auction.value if hasattr(bid.auction, "value") else bid.auction
     bid_status_value = bid.bid_status.value if hasattr(bid.bid_status, "value") else bid.bid_status
     return {
