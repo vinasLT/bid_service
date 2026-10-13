@@ -206,8 +206,44 @@ async def test_mark_payment_as_paid_updates_bid(monkeypatch):
     paid_bid = DummyBid(bid_status=BidStatus.WON, payment_status=PaymentStatus.PAID, account_blocked=False)
     stub = BidServiceStub(get_result=existing_bid, mark_paid_result=paid_bid)
     override_bid_service(monkeypatch, stub)
+    publisher = override_publisher(monkeypatch, PublisherStub())
 
     result = await admin.mark_payment_as_paid(bid_id=existing_bid.id, db=object())
 
     assert result is paid_bid
     assert stub.mark_payment_as_paid_calls == [existing_bid.id]
+    assert publisher.connected is True
+    assert publisher.closed is True
+    assert len(publisher.publish_calls) == 1
+    routing_key, payload = publisher.publish_calls[0]
+    assert routing_key == "bid.paid"
+    assert payload["bid_id"] == paid_bid.id
+    assert payload["user_uuid"] == paid_bid.user_uuid
+    assert payload["lot_id"] == paid_bid.lot_id
+    assert payload["auction"] == paid_bid.auction.value
+    assert payload["bid_amount"] == paid_bid.bid_amount
+    assert payload["bid_status"] == BidStatus.WON.value
+    assert payload["payment_status"] == PaymentStatus.PAID.value
+    assert payload["account_blocked"] is False
+    assert payload["vehicle_title"] == paid_bid.title
+    assert payload["vin"] == paid_bid.vin
+
+
+@pytest.mark.asyncio
+async def test_mark_payment_as_paid_rolls_back_when_publish_fails(monkeypatch):
+    existing_bid = DummyBid(bid_status=BidStatus.WON, payment_status=PaymentStatus.PENDING, account_blocked=True)
+    paid_bid = DummyBid(bid_status=BidStatus.WON, payment_status=PaymentStatus.PAID, account_blocked=False)
+    stub = BidServiceStub(get_result=existing_bid, mark_paid_result=paid_bid)
+    override_bid_service(monkeypatch, stub)
+    publisher = override_publisher(monkeypatch, PublisherStub(publish_exception=RuntimeError("queue down")))
+
+    with pytest.raises(BadRequestProblem) as exc_info:
+        await admin.mark_payment_as_paid(bid_id=existing_bid.id, db=object())
+    assert exc_info.value.detail.startswith("Failed to send notification")
+
+    assert stub.update_calls
+    rollback_bid_id, rollback_update = stub.update_calls[0]
+    assert rollback_bid_id == existing_bid.id
+    assert rollback_update.payment_status == PaymentStatus.PENDING
+    assert rollback_update.account_blocked is True
+    assert publisher.closed is True

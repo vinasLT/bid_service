@@ -46,7 +46,7 @@ def _serialize_datetime(value):
     return str(value)
 
 
-def _build_bid_notification_payload(bid: Bid, email: str | None, phone_number: str | None):
+def     _build_bid_notification_payload(bid: Bid, email: str | None, phone_number: str | None):
     auction_value = bid.auction.value if hasattr(bid.auction, "value") else bid.auction
     bid_status_value = bid.bid_status.value if hasattr(bid.bid_status, "value") else bid.bid_status
     return {
@@ -308,7 +308,7 @@ async def decline_bid(
 @bids_management_router.post(
     '/{bid_id}/paid',
     response_model=BidRead,
-    description=f'Mark payment as paid for won bid and unblock account, required_permission: {Permissions.BID_ALL_WRITE.value}',
+    description=f'Mark payment as paid for won bid, unblock account, and publish bid.paid, required_permission: {Permissions.BID_ALL_WRITE.value}',
     dependencies=[Depends(require_permissions(Permissions.BID_ALL_WRITE))],
 )
 async def mark_payment_as_paid(
@@ -324,7 +324,30 @@ async def mark_payment_as_paid(
     if existing_bid.payment_status == PaymentStatus.PAID:
         raise BadRequestProblem(detail="Payment already marked as paid")
 
+    previous_payment_status = existing_bid.payment_status
+    previous_account_blocked = existing_bid.account_blocked
+
     bid = await bid_service.mark_payment_as_paid(bid_id)
     if bid is None:
         raise BadRequestProblem(detail="Bid not found")
+
+    email, phone_number = await _get_user_contacts(bid.user_uuid)
+    payload = _build_bid_notification_payload(bid, email=email, phone_number=phone_number)
+
+    publisher = RabbitMQPublisher()
+    try:
+        await publisher.connect()
+        await publisher.publish(routing_key="bid.paid", payload=payload)
+    except Exception as exc:
+        await bid_service.update(
+            bid_id,
+            BidUpdate(
+                payment_status=previous_payment_status,
+                account_blocked=previous_account_blocked,
+            ),
+        )
+        raise BadRequestProblem(detail=f"Failed to send notification: {exc}")
+    finally:
+        await publisher.close()
+
     return bid
