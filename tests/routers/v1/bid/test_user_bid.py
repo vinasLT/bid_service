@@ -255,6 +255,14 @@ async def test_bid_on_auction_creates_bid_and_publishes_notification(monkeypatch
     assert payload["vehicle_title"] == "Clean Title Vehicle"
     assert payload["vehicle_image"] == "img_hd_1.jpg"
 
+    referral_calls = [call for call in publisher_stub.publish_calls if call[0] == "auction.bid.placed"]
+    assert len(referral_calls) == 1
+    _, referral_payload = referral_calls[0]
+    assert referral_payload["user_uuid"] == "user-xyz"
+    assert referral_payload["bid_id"] == created_bid.id
+    assert referral_payload["lot_id"] == created_bid.lot_id
+    assert referral_payload["created_at"] == created_bid.created_at.isoformat()
+
 
 @pytest.mark.asyncio
 async def test_bid_on_auction_raises_rpc_problem_when_auction_client_fails(monkeypatch):

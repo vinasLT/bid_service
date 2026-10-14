@@ -22,6 +22,7 @@ class DummyBid:
     images: str = "first.jpg,second.jpg"
     auction_date: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     vin: str = "VINCODE123"
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class QueryStub:

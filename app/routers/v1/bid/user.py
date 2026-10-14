@@ -31,6 +31,17 @@ user_bids_router = APIRouter()
 
 
 BID_PLACEMENT_CUTOFF = timedelta(minutes=15)
+REFERRAL_BID_PLACED_KEY = "auction.bid.placed"
+
+
+def _referral_bid_placed_payload(bid: Bid, user_uuid: str) -> dict:
+    created_at = getattr(bid, "created_at", None) or datetime.now(timezone.utc)
+    return {
+        "user_uuid": user_uuid,
+        "bid_id": bid.id,
+        "lot_id": bid.lot_id,
+        "created_at": created_at.isoformat() if isinstance(created_at, datetime) else created_at,
+    }
 
 
 def _get_proto_value(message, field_name: str):
@@ -311,6 +322,10 @@ async def bid_on_auction(
         payload['destination'] = 'telegram'
 
         await publisher.publish(routing_key="bid.new_bid_placed", payload=payload)
+        await publisher.publish(
+            routing_key=REFERRAL_BID_PLACED_KEY,
+            payload=_referral_bid_placed_payload(bid, user_uuid),
+        )
     finally:
         await publisher.close()
 
@@ -409,6 +424,10 @@ async def buy_now_on_auction(
 
         payload["destination"] = "telegram"
         await publisher.publish(routing_key="bid.you_won_bid", payload=payload)
+        await publisher.publish(
+            routing_key=REFERRAL_BID_PLACED_KEY,
+            payload=_referral_bid_placed_payload(bid, user_uuid),
+        )
     finally:
         await publisher.close()
 
